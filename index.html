@@ -1,0 +1,1263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route Art Studio</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#12131a; --panel:#191b24; --panel-2:#20222e; --line:#2c2f3d;
+    --ink:#e7e9f2; --ink-dim:#9aa0b5; --accent:#7c5cff; --accent-2:#ff2d55; --ok:#39d98a;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
+    background:var(--bg); color:var(--ink); overflow:hidden;
+  }
+  #app{display:flex;height:100%}
+  #panel{
+    width:320px;flex:0 0 320px;background:var(--panel);border-right:1px solid var(--line);
+    overflow-y:auto;padding:14px 14px 40px;
+  }
+  #map{flex:1;height:100%;background:#0d0e13}
+  h1{font-size:15px;margin:0 0 2px;letter-spacing:.2px}
+  .sub{color:var(--ink-dim);font-size:11px;margin:0 0 14px}
+  .sec{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+  .sec:first-of-type{border-top:0;margin-top:0;padding-top:0}
+  .sec h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-dim);margin:0 0 9px;font-weight:600}
+  label{display:block;font-size:11px;color:var(--ink-dim);margin:9px 0 4px}
+  .row{display:flex;gap:6px;align-items:center}
+  .row>*{min-width:0}
+  input[type=text],input[type=number],select{
+    width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    border-radius:7px;padding:6px 8px;font:inherit;font-size:12px;
+  }
+  input[type=range]{width:100%;accent-color:var(--accent);margin:2px 0}
+  button{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--ink);border-radius:7px;
+    padding:6px 9px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;
+  }
+  button:hover{background:#282b3a}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.primary:hover{background:#8d70ff}
+  button.danger:hover{border-color:var(--accent-2);color:#ff7d97}
+  button.wide{width:100%}
+  .modes{display:flex;gap:6px;margin-bottom:4px}
+  .modes button{flex:1;text-align:center}
+  .modes button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .val{font-variant-numeric:tabular-nums;color:var(--ink);font-size:11px}
+  .between{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .drop{
+    border:1px dashed var(--line);border-radius:9px;padding:14px 10px;text-align:center;
+    color:var(--ink-dim);font-size:11px;cursor:pointer;transition:.15s;
+  }
+  .drop:hover,.drop.over{border-color:var(--accent);color:var(--ink);background:#1d1f2b}
+  .stats{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:10px}
+  .stat{display:flex;justify-content:space-between;align-items:baseline;padding:2px 0}
+  .stat b{font-size:17px;font-variant-numeric:tabular-nums;font-weight:650}
+  .stat span{color:var(--ink-dim);font-size:11px}
+  .hint{color:var(--ink-dim);font-size:11px;line-height:1.5}
+  .hint kbd{background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:0 4px;font:inherit;font-size:10px}
+  .chk{display:flex;align-items:center;gap:7px;margin:7px 0;color:var(--ink);font-size:12px;cursor:pointer}
+  .chk input{accent-color:var(--accent);margin:0}
+  #toast{
+    position:absolute;left:50%;bottom:26px;transform:translateX(-50%);z-index:1200;
+    background:#000c;border:1px solid var(--line);color:#fff;padding:8px 13px;border-radius:9px;
+    font-size:12px;opacity:0;pointer-events:none;transition:opacity .2s;backdrop-filter:blur(6px);
+  }
+  #toast.show{opacity:1}
+  #busy{
+    position:absolute;right:14px;top:14px;z-index:1200;background:#000c;border:1px solid var(--line);
+    color:#fff;padding:6px 11px;border-radius:20px;font-size:11px;display:none;backdrop-filter:blur(6px);
+  }
+  #busy.show{display:block}
+  .leaflet-container{background:#0d0e13}
+  .pt-dot{
+    width:11px;height:11px;border-radius:50%;background:#fff;border:2.5px solid var(--accent-2);
+    box-shadow:0 1px 4px #0009;cursor:grab;
+  }
+  .pt-dot.first{border-color:var(--ok)}
+  .res{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:8px 9px;margin-bottom:6px;cursor:pointer;
+  }
+  .res:hover{border-color:var(--accent)}
+  .res.sel{border-color:var(--accent);background:#242542}
+  .res .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .res b{font-size:13px}
+  .res .q{font-size:10px;padding:1px 6px;border-radius:20px;background:#2f3244;color:var(--ink-dim)}
+  .res .q.good{background:#12402c;color:#6ee7a8}
+  .res .q.ok{background:#3d3616;color:#e8cc63}
+  .res .meta{color:var(--ink-dim);font-size:10.5px;margin-top:3px}
+  .res .use{margin-top:6px;width:100%;font-size:11px;padding:4px}
+  #cursorMode{
+    position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:1200;
+    background:#000b;border:1px solid var(--line);color:#fff;padding:5px 12px;border-radius:20px;
+    font-size:11px;backdrop-filter:blur(6px);pointer-events:none;letter-spacing:.02em;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel">
+    <h1>Route Art Studio</h1>
+    <p class="sub">Trace a logo over the map, snap it to real roads, export a GPX.</p>
+
+    <div class="sec">
+      <h2>1 · Find your area</h2>
+      <div class="row">
+        <input type="text" id="search" placeholder="City, address, park…" autocomplete="off">
+        <button id="searchBtn">Go</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>2 · Logo overlay</h2>
+      <div class="drop" id="drop">
+        Drop an image here or <u>browse</u><br>
+        <span style="opacity:.7">PNG with transparency works best</span>
+      </div>
+      <input type="file" id="file" accept="image/*" hidden>
+
+      <label class="between"><span>Opacity</span><span class="val" id="opacityVal">55%</span></label>
+      <input type="range" id="opacity" min="0" max="100" value="55">
+
+      <label class="between"><span>Size (width on the ground)</span><span class="val" id="sizeVal">1.0 km</span></label>
+      <input type="range" id="size" min="0" max="1000" value="500">
+
+      <label class="between"><span>Rotation</span><span class="val" id="rotVal">0°</span></label>
+      <input type="range" id="rot" min="-180" max="180" step="0.5" value="0">
+
+      <label>Blend mode</label>
+      <select id="blend">
+        <option value="normal">Normal</option>
+        <option value="multiply">Multiply (dark lines)</option>
+        <option value="screen">Screen (light lines)</option>
+        <option value="difference">Difference (high contrast)</option>
+      </select>
+
+      <label class="chk"><input type="checkbox" id="invert"> Invert colors</label>
+      <label class="chk"><input type="checkbox" id="punch"> Punch up contrast</label>
+
+      <div class="row" style="margin-top:9px">
+        <button id="fitOverlay" style="flex:1">Fit to view</button>
+        <button id="zoomOverlay" style="flex:1">Zoom to logo</button>
+      </div>
+      <button id="clearImg" class="wide danger" style="margin-top:6px">Remove image</button>
+    </div>
+
+    <div class="sec">
+      <h2>3 · Centerline</h2>
+      <canvas id="skelPreview" width="584" height="300"
+              style="width:100%;height:150px;background:#0e0f16;border:1px solid var(--line);border-radius:9px;display:block"></canvas>
+      <p class="hint" id="skelStats" style="margin-top:6px">Load an image to trace its centerline.</p>
+
+      <label class="between"><span>Ink threshold</span><span class="val" id="thrVal">0.50</span></label>
+      <input type="range" id="thr" min="5" max="95" value="50">
+
+      <label class="chk"><input type="checkbox" id="skelInvert"> Light artwork on a dark background</label>
+
+      <label class="between"><span>Smoothing</span><span class="val" id="simpVal">1.6 px</span></label>
+      <input type="range" id="simp" min="2" max="60" value="16">
+
+      <label class="between"><span>Drop specks under</span><span class="val" id="minStrokeVal">12 px</span></label>
+      <input type="range" id="minStroke" min="0" max="80" value="12">
+
+      <label class="between"><span>Prune corner spurs</span><span class="val" id="pruneVal">14 px</span></label>
+      <input type="range" id="prune" min="0" max="60" value="14">
+
+      <label class="chk"><input type="checkbox" id="showSkel" checked> Show centerline on the map</label>
+    </div>
+
+    <div class="sec">
+      <h2>4 · Auto-match to roads</h2>
+      <p class="hint">Frame the area you want to search, load its streets, then let it hunt for placements.</p>
+
+      <label>Network</label>
+      <select id="netKind">
+        <option value="foot">Walkable — roads, paths, trails</option>
+        <option value="quiet">Quiet — residential + paths</option>
+        <option value="road">Roads only</option>
+      </select>
+      <button id="loadNet" class="wide" style="margin-top:8px">Load streets for this view</button>
+      <p class="hint" id="netStats" style="margin-top:6px"></p>
+
+      <label>Target run distance</label>
+      <div class="row">
+        <input type="number" id="matchDist" value="10" step="0.5" min="0.5">
+        <select id="matchUnit" style="width:86px"><option value="km">km</option><option value="mi">mi</option></select>
+      </div>
+
+      <label>Rotation</label>
+      <select id="rotMode">
+        <option value="none">Keep the logo upright</option>
+        <option value="small">Allow ± 20°</option>
+        <option value="full">Any angle</option>
+      </select>
+
+      <label class="between"><span>Search effort</span><span class="val" id="detailVal">Balanced</span></label>
+      <input type="range" id="detail" min="0" max="2" value="1">
+
+      <button id="runMatch" class="primary wide" style="margin-top:9px">Find matching routes</button>
+      <div class="hint" id="matchProgress" style="margin-top:7px"></div>
+      <div id="matchResults" style="margin-top:8px"></div>
+    </div>
+
+    <div class="sec">
+      <h2>5 · Draw &amp; edit route</h2>
+      <div class="modes">
+        <button id="modeAdjust" aria-pressed="true">Move logo</button>
+        <button id="modeDraw" aria-pressed="false">Draw route</button>
+      </div>
+      <p class="hint" id="modeHint">Drag the map to move the logo. <kbd>shift</kbd>+drag rotates, <kbd>alt</kbd>+drag resizes.</p>
+
+      <label class="chk"><input type="checkbox" id="snap" checked> Snap to real roads &amp; paths</label>
+      <label>Routing style</label>
+      <select id="profile">
+        <option value="trekking">Trekking — roads + paths (default)</option>
+        <option value="hiking-beta">Hiking — favours trails</option>
+        <option value="shortest">Shortest — most direct</option>
+        <option value="fastbike">Bike — roads, avoids stairs</option>
+      </select>
+
+      <label class="chk"><input type="checkbox" id="closed"> Close the loop (return to start)</label>
+
+      <div class="row" style="margin-top:9px">
+        <button id="undo" style="flex:1">Undo point</button>
+        <button id="clearRoute" class="danger" style="flex:1">Clear route</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>6 · Distance</h2>
+      <div class="stats">
+        <div class="stat"><span>Total</span><b id="distKm">0.00 km</b></div>
+        <div class="stat"><span>Miles</span><b id="distMi">0.00 mi</b></div>
+        <div class="stat"><span>Points</span><b id="ptCount">0</b></div>
+      </div>
+      <label>Target distance (optional)</label>
+      <div class="row">
+        <input type="number" id="target" placeholder="e.g. 10" step="0.1" min="0">
+        <select id="targetUnit" style="width:90px">
+          <option value="km">km</option>
+          <option value="mi">mi</option>
+        </select>
+      </div>
+      <p class="hint" id="targetOut" style="margin-top:6px"></p>
+    </div>
+
+    <div class="sec">
+      <h2>7 · Export</h2>
+      <label>Route name</label>
+      <input type="text" id="routeName" value="Route Art" >
+      <button id="gpx" class="primary wide" style="margin-top:9px">Download GPX</button>
+      <div class="row" style="margin-top:6px">
+        <button id="geojson" style="flex:1">GeoJSON</button>
+        <button id="reset" class="danger" style="flex:1">Reset all</button>
+      </div>
+      <p class="hint" style="margin-top:10px">
+        Load the GPX into your watch app as a route/course (COROS → Route Library, Garmin → Courses),
+        then run it with navigation on. The activity syncs to Strava the way it always does.
+      </p>
+    </div>
+
+    <div class="sec">
+      <h2>Shortcuts</h2>
+      <p class="hint">
+        <kbd>M</kbd> swap move/draw · <kbd>[</kbd> <kbd>]</kbd> rotate · <kbd>-</kbd> <kbd>=</kbd> resize ·
+        arrows nudge · <kbd>U</kbd> undo point · hold <kbd>shift</kbd> for bigger steps
+      </p>
+    </div>
+  </aside>
+
+  <main id="map"></main>
+</div>
+
+<div id="cursorMode">Move logo</div>
+<div id="busy">Routing…</div>
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="skeleton.js"></script>
+<script src="matcher.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var STORE = "routeArt.v2";
+
+  var state = {
+    img: null, aspect: 1,
+    center: { lat: 40.7608, lng: -111.891 },
+    widthM: 1000, rotation: 0, opacity: 0.55,
+    blend: "normal", invert: false, punch: false,
+    mode: "adjust",
+    points: [], closed: false, snap: true, profile: "trekking",
+    view: { lat: 40.7608, lng: -111.891, zoom: 14 },
+    name: "Route Art",
+    segs: {}
+  };
+
+  /* ---------------------------------------------------------------- map */
+
+  var map = L.map("map", { zoomControl: true, worldCopyJump: true })
+    .setView([state.view.lat, state.view.lng], state.view.zoom);
+
+  var bases = {
+    "Streets": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "&copy; OpenStreetMap"
+    }),
+    "Light": L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+      maxZoom: 20, subdomains: "abcd", attribution: "&copy; OpenStreetMap, &copy; CARTO"
+    }),
+    "Dark": L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      maxZoom: 20, subdomains: "abcd", attribution: "&copy; OpenStreetMap, &copy; CARTO"
+    }),
+    "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19, attribution: "Esri, Maxar, Earthstar Geographics"
+    })
+  };
+  bases["Light"].addTo(map);
+  L.control.layers(bases, null, { position: "topright" }).addTo(map);
+  L.control.scale({ imperial: true, metric: true, position: "bottomright" }).addTo(map);
+
+  map.createPane("logoPane");
+  var logoPane = map.getPane("logoPane");
+  logoPane.style.zIndex = 350;
+  logoPane.style.pointerEvents = "none";
+
+  var imgEl = document.createElement("img");
+  imgEl.style.position = "absolute";
+  imgEl.style.transformOrigin = "center center";
+  imgEl.style.display = "none";
+  imgEl.style.willChange = "transform";
+  imgEl.draggable = false;
+  logoPane.appendChild(imgEl);
+
+  /* ------------------------------------------------------- overlay maths */
+
+  function metersPerPixel(lat, zoom) {
+    return 156543.03392804097 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom);
+  }
+
+  function drawOverlay(animZoom, animCenter) {
+    if (!state.img) { imgEl.style.display = "none"; return; }
+    imgEl.style.display = "";
+    var z = (animZoom === undefined) ? map.getZoom() : animZoom;
+    var pt = (animZoom === undefined)
+      ? map.latLngToLayerPoint(state.center)
+      : map._latLngToNewLayerPoint(state.center, animZoom, animCenter);
+    var w = state.widthM / metersPerPixel(state.center.lat, z);
+    var h = w / state.aspect;
+    imgEl.style.width = w + "px";
+    imgEl.style.height = h + "px";
+    imgEl.style.left = (pt.x - w / 2) + "px";
+    imgEl.style.top = (pt.y - h / 2) + "px";
+    imgEl.style.transform = "rotate(" + state.rotation + "deg)";
+    if (typeof drawSkeletonOverlay === "function" && animZoom === undefined) drawSkeletonOverlay();
+  }
+
+  function applyImageStyle() {
+    imgEl.style.opacity = state.opacity;
+    logoPane.style.mixBlendMode = state.blend;
+    var f = [];
+    if (state.invert) f.push("invert(1)");
+    if (state.punch) f.push("contrast(2.2) saturate(1.3)");
+    imgEl.style.filter = f.join(" ");
+  }
+
+  map.on("move zoom viewreset resize zoomend", function () { drawOverlay(); });
+  map.on("zoomanim", function (e) { drawOverlay(e.zoom, e.center); });
+  map.on("moveend zoomend", function () {
+    var c = map.getCenter();
+    state.view = { lat: c.lat, lng: c.lng, zoom: map.getZoom() };
+    save();
+  });
+
+  /* ------------------------------------------------------------- routing */
+
+  var routeCasing = L.polyline([], { color: "#ffffff", weight: 8, opacity: 0.75, lineJoin: "round" }).addTo(map);
+  var routeLine = L.polyline([], { color: "#ff2d55", weight: 4.5, opacity: 1, lineJoin: "round" }).addTo(map);
+  var markerLayer = L.layerGroup().addTo(map);
+
+  var segCache = {};        // key -> [[lat,lng], ...]
+  var pending = 0;
+
+  function segKey(a, b, profile, snap) {
+    var r = function (n) { return n.toFixed(6); };
+    return (snap ? profile : "straight") + "|" + r(a.lat) + "," + r(a.lng) + "|" + r(b.lat) + "," + r(b.lng);
+  }
+
+  function pairs() {
+    var out = [], i;
+    for (i = 0; i < state.points.length - 1; i++) out.push([state.points[i], state.points[i + 1]]);
+    if (state.closed && state.points.length > 2) {
+      out.push([state.points[state.points.length - 1], state.points[0]]);
+    }
+    return out;
+  }
+
+  function fetchSegment(a, b) {
+    var url = "https://brouter.de/brouter?lonlats=" +
+      a.lng.toFixed(6) + "," + a.lat.toFixed(6) + "|" +
+      b.lng.toFixed(6) + "," + b.lat.toFixed(6) +
+      "&profile=" + encodeURIComponent(state.profile) +
+      "&alternativeidx=0&format=geojson";
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("router " + r.status);
+      return r.json();
+    }).then(function (j) {
+      var coords = j.features && j.features[0] && j.features[0].geometry && j.features[0].geometry.coordinates;
+      if (!coords || !coords.length) throw new Error("no path");
+      return coords.map(function (c) { return [c[1], c[0]]; });
+    });
+  }
+
+  var renderToken = 0;
+
+  function renderRoute() {
+    var token = ++renderToken;
+    var ps = pairs();
+    var needed = [];
+
+    ps.forEach(function (p) {
+      var k = segKey(p[0], p[1], state.profile, state.snap);
+      if (!segCache[k]) needed.push({ key: k, a: p[0], b: p[1] });
+    });
+
+    // straight segments are free
+    needed = needed.filter(function (n) {
+      if (!state.snap) {
+        segCache[n.key] = [[n.a.lat, n.a.lng], [n.b.lat, n.b.lng]];
+        return false;
+      }
+      return true;
+    });
+
+    paint();
+    if (!needed.length) return;
+
+    pending += needed.length;
+    $("busy").classList.add("show");
+
+    var idx = 0, active = 0, LIMIT = 4, failed = 0;
+
+    function next() {
+      if (idx >= needed.length) {
+        if (active === 0) done();
+        return;
+      }
+      var job = needed[idx++];
+      active++;
+      fetchSegment(job.a, job.b).then(function (line) {
+        segCache[job.key] = line;
+      }).catch(function () {
+        failed++;
+        segCache[job.key] = [[job.a.lat, job.a.lng], [job.b.lat, job.b.lng]];
+      }).then(function () {
+        active--; pending--;
+        if (token === renderToken) paint();
+        if (pending <= 0) { pending = 0; $("busy").classList.remove("show"); }
+        next();
+      });
+    }
+
+    function done() {
+      if (failed) toast(failed + " segment(s) couldn't be routed — drawn straight instead.");
+    }
+
+    for (var i = 0; i < LIMIT; i++) next();
+  }
+
+  function fullLine() {
+    var out = [];
+    pairs().forEach(function (p) {
+      var seg = segCache[segKey(p[0], p[1], state.profile, state.snap)];
+      if (!seg) return;
+      if (out.length) out = out.concat(seg.slice(1));
+      else out = out.concat(seg);
+    });
+    if (!out.length && state.points.length === 1) {
+      out = [[state.points[0].lat, state.points[0].lng]];
+    }
+    return out;
+  }
+
+  function haversine(a, b) {
+    var R = 6371008.8, t = Math.PI / 180;
+    var dLat = (b[0] - a[0]) * t, dLng = (b[1] - a[1]) * t;
+    var la1 = a[0] * t, la2 = b[0] * t;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  function paint() {
+    var line = fullLine();
+    routeCasing.setLatLngs(line);
+    routeLine.setLatLngs(line);
+
+    markerLayer.clearLayers();
+    state.points.forEach(function (p, i) {
+      var m = L.marker([p.lat, p.lng], {
+        draggable: true,
+        icon: L.divIcon({ className: "", html: '<div class="pt-dot' + (i === 0 ? " first" : "") + '"></div>', iconSize: [11, 11], iconAnchor: [5.5, 5.5] })
+      });
+      m.on("drag", function (e) {
+        state.points[i] = { lat: e.latlng.lat, lng: e.latlng.lng };
+        var l = fullLine();
+        routeCasing.setLatLngs(l); routeLine.setLatLngs(l);
+      });
+      m.on("dragend", function (e) {
+        state.points[i] = { lat: e.target.getLatLng().lat, lng: e.target.getLatLng().lng };
+        renderRoute(); save();
+      });
+      m.on("contextmenu", function () {
+        state.points.splice(i, 1);
+        renderRoute(); save();
+      });
+      m.bindTooltip(String(i + 1), { direction: "top", offset: [0, -6] });
+      markerLayer.addLayer(m);
+    });
+
+    var meters = 0, i;
+    for (i = 1; i < line.length; i++) meters += haversine(line[i - 1], line[i]);
+    updateStats(meters);
+  }
+
+  function updateStats(meters) {
+    var km = meters / 1000, mi = meters / 1609.344;
+    $("distKm").textContent = km.toFixed(2) + " km";
+    $("distMi").textContent = mi.toFixed(2) + " mi";
+    $("ptCount").textContent = String(state.points.length);
+
+    var t = parseFloat($("target").value);
+    if (!isNaN(t) && t > 0) {
+      var have = $("targetUnit").value === "mi" ? mi : km;
+      var d = have - t, u = $("targetUnit").value;
+      var pct = t ? (have / t * 100) : 0;
+      $("targetOut").innerHTML = Math.abs(d) < 0.05
+        ? '<span style="color:var(--ok)">On target (' + pct.toFixed(0) + '%)</span>'
+        : (d < 0 ? "Add " : "Trim ") + Math.abs(d).toFixed(2) + " " + u + " (" + pct.toFixed(0) + "% of target)";
+    } else {
+      $("targetOut").textContent = "";
+    }
+  }
+
+  /* ------------------------------------------------------ map interaction */
+
+  var drag = null;
+
+  map.on("mousedown", function (e) {
+    if (state.mode !== "adjust" || !state.img) return;
+    var oe = e.originalEvent;
+    drag = {
+      startLatLng: e.latlng,
+      startCenter: { lat: state.center.lat, lng: state.center.lng },
+      startRot: state.rotation,
+      startWidth: state.widthM,
+      startPt: map.latLngToContainerPoint(e.latlng),
+      kind: oe.shiftKey ? "rotate" : (oe.altKey ? "scale" : "move")
+    };
+    var c = map.latLngToContainerPoint(state.center);
+    drag.baseAngle = Math.atan2(drag.startPt.y - c.y, drag.startPt.x - c.x);
+    map.dragging.disable();
+    L.DomUtil.disableTextSelection();
+  });
+
+  map.on("mousemove", function (e) {
+    if (!drag) return;
+    if (drag.kind === "move") {
+      state.center = {
+        lat: drag.startCenter.lat + (e.latlng.lat - drag.startLatLng.lat),
+        lng: drag.startCenter.lng + (e.latlng.lng - drag.startLatLng.lng)
+      };
+    } else if (drag.kind === "rotate") {
+      var c = map.latLngToContainerPoint(state.center);
+      var p = map.latLngToContainerPoint(e.latlng);
+      var ang = Math.atan2(p.y - c.y, p.x - c.x);
+      state.rotation = normDeg(drag.startRot + (ang - drag.baseAngle) * 180 / Math.PI);
+      $("rot").value = state.rotation;
+      $("rotVal").textContent = state.rotation.toFixed(1) + "°";
+    } else {
+      var p2 = map.latLngToContainerPoint(e.latlng);
+      var dy = drag.startPt.y - p2.y;
+      state.widthM = clamp(drag.startWidth * Math.pow(1.008, dy), 20, 200000);
+      syncSizeUI();
+    }
+    drawOverlay();
+  });
+
+  function endDrag() {
+    if (!drag) return;
+    drag = null;
+    map.dragging.enable();
+    L.DomUtil.enableTextSelection();
+    save();
+  }
+  map.on("mouseup", endDrag);
+  document.addEventListener("mouseup", endDrag);
+
+  map.on("click", function (e) {
+    if (state.mode !== "draw") return;
+    state.points.push({ lat: e.latlng.lat, lng: e.latlng.lng });
+    renderRoute();
+    save();
+  });
+
+  function setMode(m) {
+    state.mode = m;
+    $("modeAdjust").setAttribute("aria-pressed", m === "adjust");
+    $("modeDraw").setAttribute("aria-pressed", m === "draw");
+    $("cursorMode").textContent = m === "adjust" ? "Move logo" : "Draw route — click to add points";
+    $("modeHint").innerHTML = m === "adjust"
+      ? 'Drag the map to move the logo. <kbd>shift</kbd>+drag rotates, <kbd>alt</kbd>+drag resizes.'
+      : 'Click to drop route points. Drag a point to move it, right-click a point to delete it.';
+    map.getContainer().style.cursor = m === "draw" ? "crosshair" : "";
+    save();
+  }
+
+  /* --------------------------------------------------------------- image */
+
+  function loadImageFile(file) {
+    if (!file || !/^image\//.test(file.type)) { toast("That doesn't look like an image."); return; }
+    var fr = new FileReader();
+    fr.onload = function () { setImage(fr.result, true); };
+    fr.readAsDataURL(file);
+  }
+
+  function setImage(dataUrl, recenter) {
+    var probe = new Image();
+    probe.onload = function () {
+      state.img = dataUrl;
+      state.aspect = probe.naturalWidth / probe.naturalHeight;
+      imgEl.src = dataUrl;
+      srcImage = probe;
+      if (recenter) fitOverlayToView();
+      applyImageStyle();
+      drawOverlay();
+      if (recenter) {
+        var inv = Skeleton.autoInvert(probe);
+        skelOpts.invert = inv;
+        $("skelInvert").checked = inv;
+      }
+      updateSkeleton();
+      save();
+    };
+    probe.onerror = function () { toast("Couldn't read that image."); };
+    probe.src = dataUrl;
+  }
+
+  function fitOverlayToView() {
+    var s = map.getSize();
+    var wM = map.distance(
+      map.containerPointToLatLng([0, s.y / 2]),
+      map.containerPointToLatLng([s.x, s.y / 2])
+    );
+    var hM = map.distance(
+      map.containerPointToLatLng([s.x / 2, 0]),
+      map.containerPointToLatLng([s.x / 2, s.y])
+    );
+    var c = map.getCenter();
+    state.center = { lat: c.lat, lng: c.lng };
+    state.widthM = clamp(Math.min(wM * 0.8, hM * 0.8 * state.aspect), 20, 200000);
+    syncSizeUI();
+    drawOverlay();
+  }
+
+  /* ------------------------------------------------------------- helpers */
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function normDeg(d) { while (d > 180) d -= 360; while (d < -180) d += 360; return d; }
+
+  var sizeMin = 20, sizeMax = 200000;
+  function sizeToSlider(m) {
+    return Math.round(1000 * Math.log(m / sizeMin) / Math.log(sizeMax / sizeMin));
+  }
+  function sliderToSize(v) {
+    return sizeMin * Math.pow(sizeMax / sizeMin, v / 1000);
+  }
+  function fmtLen(m) {
+    return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(2) + " km";
+  }
+  function syncSizeUI() {
+    $("size").value = sizeToSlider(state.widthM);
+    $("sizeVal").textContent = fmtLen(state.widthM);
+  }
+
+  var toastTimer;
+  function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 3200);
+  }
+
+  var saveTimer;
+
+  /* Persist the geometry of the current route's segments too, so a reload keeps
+     the exact path — otherwise every segment gets re-routed and the shape drifts. */
+  function currentSegments() {
+    var out = {};
+    try {
+      pairs().forEach(function (p) {
+        var k = segKey(p[0], p[1], state.profile, state.snap);
+        if (segCache[k]) out[k] = segCache[k];
+      });
+    } catch (e) { /* nothing to persist yet */ }
+    return out;
+  }
+
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      state.segs = currentSegments();
+      try {
+        localStorage.setItem(STORE, JSON.stringify(state));
+      } catch (err) {
+        try {
+          var lite = JSON.parse(JSON.stringify(state));
+          lite.img = null;
+          localStorage.setItem(STORE, JSON.stringify(lite));
+        } catch (e2) { /* give up quietly */ }
+      }
+    }, 400);
+  }
+
+  function download(name, mime, text) {
+    var blob = new Blob([text], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 500);
+  }
+
+  function decimate(pts, max) {
+    if (pts.length <= max) return pts;
+    var step = (pts.length - 1) / (max - 1), out = [], i;
+    for (i = 0; i < max; i++) out.push(pts[Math.round(i * step)]);
+    return out;
+  }
+
+  function xml(s) {
+    return String(s).replace(/[<>&'"]/g, function (c) {
+      return { "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c];
+    });
+  }
+
+  /* ------------------------------------------------------------- exports */
+
+  function buildGpx() {
+    var line = decimate(fullLine(), 2000);
+    if (line.length < 2) return null;
+    var name = $("routeName").value || "Route Art";
+    var body = line.map(function (p) {
+      return '   <trkpt lat="' + p[0].toFixed(6) + '" lon="' + p[1].toFixed(6) + '"></trkpt>';
+    }).join("\n");
+    var gpx =
+      '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<gpx version="1.1" creator="Route Art Studio" xmlns="http://www.topografix.com/GPX/1/1" ' +
+      'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+      'xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n' +
+      ' <metadata><name>' + xml(name) + '</name></metadata>\n' +
+      ' <trk>\n  <name>' + xml(name) + '</name>\n  <trkseg>\n' + body + '\n  </trkseg>\n </trk>\n</gpx>\n';
+    return { name: name, gpx: gpx, points: line.length };
+  }
+
+  function exportGpx() {
+    var out = buildGpx();
+    if (!out) { toast("Draw at least two points first."); return; }
+    download(out.name.replace(/[^\w\-]+/g, "_") + ".gpx", "application/gpx+xml", out.gpx);
+    toast("GPX downloaded — " + out.points + " points.");
+  }
+
+  function exportGeoJson() {
+    var line = fullLine();
+    if (line.length < 2) { toast("Draw at least two points first."); return; }
+    var gj = {
+      type: "Feature",
+      properties: { name: $("routeName").value || "Route Art" },
+      geometry: { type: "LineString", coordinates: line.map(function (p) { return [p[1], p[0]]; }) }
+    };
+    download(($("routeName").value || "route").replace(/[^\w\-]+/g, "_") + ".geojson",
+      "application/geo+json", JSON.stringify(gj, null, 1));
+  }
+
+  /* ---------------------------------------------------------------- wire */
+
+  $("searchBtn").addEventListener("click", doSearch);
+  $("search").addEventListener("keydown", function (e) { if (e.key === "Enter") doSearch(); });
+
+  function doSearch() {
+    var q = $("search").value.trim();
+    if (!q) return;
+    $("busy").classList.add("show");
+    fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.length) { toast("No match for that place."); return; }
+        var r0 = j[0];
+        if (r0.boundingbox) {
+          map.fitBounds([[+r0.boundingbox[0], +r0.boundingbox[2]], [+r0.boundingbox[1], +r0.boundingbox[3]]]);
+        } else {
+          map.setView([+r0.lat, +r0.lon], 14);
+        }
+      })
+      .catch(function () { toast("Search failed — check your connection."); })
+      .then(function () { if (pending <= 0) $("busy").classList.remove("show"); });
+  }
+
+  $("drop").addEventListener("click", function () { $("file").click(); });
+  $("file").addEventListener("change", function (e) { loadImageFile(e.target.files[0]); });
+
+  ["dragenter", "dragover"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); $("drop").classList.add("over"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); $("drop").classList.remove("over"); });
+  });
+  document.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) loadImageFile(e.dataTransfer.files[0]);
+  });
+
+  $("opacity").addEventListener("input", function (e) {
+    state.opacity = e.target.value / 100;
+    $("opacityVal").textContent = e.target.value + "%";
+    applyImageStyle(); save();
+  });
+  $("size").addEventListener("input", function (e) {
+    state.widthM = sliderToSize(+e.target.value);
+    $("sizeVal").textContent = fmtLen(state.widthM);
+    drawOverlay(); save();
+  });
+  $("rot").addEventListener("input", function (e) {
+    state.rotation = +e.target.value;
+    $("rotVal").textContent = state.rotation.toFixed(1) + "°";
+    drawOverlay(); save();
+  });
+  $("blend").addEventListener("change", function (e) { state.blend = e.target.value; applyImageStyle(); save(); });
+  $("invert").addEventListener("change", function (e) { state.invert = e.target.checked; applyImageStyle(); save(); });
+  $("punch").addEventListener("change", function (e) { state.punch = e.target.checked; applyImageStyle(); save(); });
+
+  $("fitOverlay").addEventListener("click", function () { if (state.img) { fitOverlayToView(); save(); } });
+  $("zoomOverlay").addEventListener("click", function () {
+    if (!state.img) return;
+    var half = state.widthM / 2;
+    var dLat = half / 111320;
+    var dLng = half / (111320 * Math.cos(state.center.lat * Math.PI / 180));
+    map.fitBounds([[state.center.lat - dLat, state.center.lng - dLng],
+                   [state.center.lat + dLat, state.center.lng + dLng]], { padding: [40, 40] });
+  });
+  $("clearImg").addEventListener("click", function () {
+    state.img = null; srcImage = null; imgEl.removeAttribute("src");
+    drawOverlay(); updateSkeleton(); save();
+  });
+
+  $("modeAdjust").addEventListener("click", function () { setMode("adjust"); });
+  $("modeDraw").addEventListener("click", function () { setMode("draw"); });
+
+  $("snap").addEventListener("change", function (e) { state.snap = e.target.checked; renderRoute(); save(); });
+  $("profile").addEventListener("change", function (e) { state.profile = e.target.value; renderRoute(); save(); });
+  $("closed").addEventListener("change", function (e) { state.closed = e.target.checked; renderRoute(); save(); });
+
+  $("undo").addEventListener("click", function () { state.points.pop(); renderRoute(); save(); });
+  $("clearRoute").addEventListener("click", function () { state.points = []; renderRoute(); save(); });
+
+  $("target").addEventListener("input", function () { paint(); save(); });
+  $("targetUnit").addEventListener("change", function () { paint(); save(); });
+  $("routeName").addEventListener("input", function () { state.name = $("routeName").value; save(); });
+
+  $("gpx").addEventListener("click", exportGpx);
+  $("geojson").addEventListener("click", exportGeoJson);
+  $("reset").addEventListener("click", function () {
+    if (!confirm("Clear the logo, the route, and all settings?")) return;
+    try { localStorage.removeItem(STORE); } catch (e) {}
+    location.reload();
+  });
+
+  document.addEventListener("keydown", function (e) {
+    var t = e.target.tagName;
+    if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
+    var big = e.shiftKey, k = e.key;
+
+    if (k === "m" || k === "M") { setMode(state.mode === "adjust" ? "draw" : "adjust"); return; }
+    if (k === "u" || k === "U") { state.points.pop(); renderRoute(); save(); return; }
+    if (k === "Escape") { setMode("adjust"); return; }
+
+    if (!state.img) return;
+    var step = big ? 5 : 1, handled = true;
+
+    if (k === "[") { state.rotation = normDeg(state.rotation - step); }
+    else if (k === "]") { state.rotation = normDeg(state.rotation + step); }
+    else if (k === "-" || k === "_") { state.widthM = clamp(state.widthM / (big ? 1.2 : 1.03), 20, 200000); }
+    else if (k === "=" || k === "+") { state.widthM = clamp(state.widthM * (big ? 1.2 : 1.03), 20, 200000); }
+    else if (k.indexOf("Arrow") === 0) {
+      var nudge = state.widthM * (big ? 0.05 : 0.01);
+      var dLat = nudge / 111320;
+      var dLng = nudge / (111320 * Math.cos(state.center.lat * Math.PI / 180));
+      if (k === "ArrowUp") state.center.lat += dLat;
+      if (k === "ArrowDown") state.center.lat -= dLat;
+      if (k === "ArrowLeft") state.center.lng -= dLng;
+      if (k === "ArrowRight") state.center.lng += dLng;
+    } else handled = false;
+
+    if (handled) {
+      e.preventDefault();
+      $("rot").value = state.rotation;
+      $("rotVal").textContent = state.rotation.toFixed(1) + "°";
+      syncSizeUI();
+      drawOverlay();
+      save();
+    }
+  });
+
+  /* ------------------------------------------------------------ skeleton */
+
+  var srcImage = null;      // HTMLImageElement of the current logo
+  var skel = null;          // { strokes, width, height, ... }
+  var skelLayer = L.layerGroup().addTo(map);
+
+  var skelOpts = { threshold: 0.5, invert: false, simplify: 1.6, minStroke: 12, prune: 14, show: true };
+
+  function shapeToLatLng(u, v) {
+    var th = state.rotation * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
+    var e = state.widthM * u, n = state.widthM * v;
+    var east = e * c + n * sn, north = -e * sn + n * c;
+    return [
+      state.center.lat + north / 110574,
+      state.center.lng + east / (111320 * Math.cos(state.center.lat * Math.PI / 180))
+    ];
+  }
+
+  function strokeToShapeUnits(stroke) {
+    var W = skel.width, H = skel.height;
+    return stroke.map(function (p) { return [(p[0] - W / 2) / W, -(p[1] - H / 2) / W]; });
+  }
+
+  /* Ordered + oriented runs, in shape units — what the matcher searches with. */
+  function shapeRuns() {
+    if (!skel || !skel.strokes.length) return [];
+    return Skeleton.drawingRuns(skel.strokes).map(strokeToShapeUnits);
+  }
+
+  function drawSkeletonOverlay() {
+    skelLayer.clearLayers();
+    if (!skel || !skelOpts.show || !state.img) return;
+    skel.strokes.forEach(function (st) {
+      var ll = strokeToShapeUnits(st).map(function (uv) { return shapeToLatLng(uv[0], uv[1]); });
+      L.polyline(ll, { color: "#00e5ff", weight: 2, opacity: 0.95, interactive: false }).addTo(skelLayer);
+    });
+  }
+
+  var skelTimer;
+  function scheduleSkeleton() {
+    clearTimeout(skelTimer);
+    skelTimer = setTimeout(updateSkeleton, 130);
+  }
+
+  function updateSkeleton() {
+    var cv = $("skelPreview");
+    if (!srcImage) {
+      skel = null;
+      cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+      $("skelStats").textContent = "Load an image to trace its centerline.";
+      drawSkeletonOverlay();
+      return;
+    }
+    var t0 = performance.now();
+    try {
+      skel = Skeleton.fromImage(srcImage, {
+        threshold: skelOpts.threshold,
+        invert: skelOpts.invert,
+        simplify: skelOpts.simplify,
+        minStroke: skelOpts.minStroke,
+        prune: skelOpts.prune,
+        despeckle: 24
+      });
+    } catch (err) {
+      $("skelStats").textContent = "Couldn't trace that image: " + err.message;
+      return;
+    }
+    Skeleton.preview(skel, cv, srcImage);
+    var ms = Math.round(performance.now() - t0);
+    $("skelStats").innerHTML = skel.strokes.length
+      ? skel.strokes.length + " stroke" + (skel.strokes.length === 1 ? "" : "s") +
+        " · " + skel.pointCount + " points · " + ms + " ms" +
+        (skel.strokes.length > 6 ? '<br><span style="color:#e8cc63">Lots of separate strokes — the route will need connector legs between them.</span>' : "")
+      : '<span style="color:#e8cc63">Nothing found — try moving the threshold or ticking the invert box.</span>';
+    drawSkeletonOverlay();
+  }
+
+  $("thr").addEventListener("input", function (e) {
+    skelOpts.threshold = e.target.value / 100;
+    $("thrVal").textContent = skelOpts.threshold.toFixed(2);
+    scheduleSkeleton();
+  });
+  $("skelInvert").addEventListener("change", function (e) { skelOpts.invert = e.target.checked; scheduleSkeleton(); });
+  $("simp").addEventListener("input", function (e) {
+    skelOpts.simplify = e.target.value / 10;
+    $("simpVal").textContent = skelOpts.simplify.toFixed(1) + " px";
+    scheduleSkeleton();
+  });
+  $("minStroke").addEventListener("input", function (e) {
+    skelOpts.minStroke = +e.target.value;
+    $("minStrokeVal").textContent = skelOpts.minStroke + " px";
+    scheduleSkeleton();
+  });
+  $("prune").addEventListener("input", function (e) {
+    skelOpts.prune = +e.target.value;
+    $("pruneVal").textContent = skelOpts.prune + " px";
+    scheduleSkeleton();
+  });
+  $("showSkel").addEventListener("change", function (e) { skelOpts.show = e.target.checked; drawSkeletonOverlay(); });
+
+  /* ---------------------------------------------------------- auto-match */
+
+  var matcher = Matcher.create();
+  var netLoaded = false;
+  var results = [];
+  var previewLayer = L.layerGroup().addTo(map);
+
+  function bboxKm(b) {
+    return {
+      w: map.distance(b.getSouthWest(), b.getSouthEast()) / 1000,
+      h: map.distance(b.getSouthWest(), b.getNorthWest()) / 1000
+    };
+  }
+
+  $("loadNet").addEventListener("click", function () {
+    var b = map.getBounds(), d = bboxKm(b);
+    if (d.w * d.h > 160) {
+      toast("That view covers " + d.w.toFixed(1) + " × " + d.h.toFixed(1) + " km — zoom in a bit (under ~160 km²).");
+      return;
+    }
+    $("loadNet").disabled = true;
+    $("netStats").textContent = "Downloading streets from OpenStreetMap…";
+    Matcher.fetchNetwork(b, $("netKind").value, function (note) { $("netStats").textContent = note; })
+      .then(function (g) {
+        if (!g.lat.length) throw new Error("no streets found in this view");
+        var c = map.getCenter();
+        $("netStats").textContent = "Building search index…";
+        return matcher.loadGraph(g, c.lat, c.lng, function (m) {
+          $("netStats").textContent = m.stage + "…";
+        }).then(function (info) {
+          netLoaded = true;
+          $("netStats").innerHTML = "<span style=\"color:#6ee7a8\">Ready</span> — " +
+            info.nodes.toLocaleString() + " junctions, " + info.edges.toLocaleString() +
+            " segments, " + Math.round(info.cell) + " m grid over " +
+            (info.spanX / 1000).toFixed(1) + " × " + (info.spanY / 1000).toFixed(1) + " km.";
+        });
+      })
+      .catch(function (err) {
+        $("netStats").innerHTML = "<span style=\"color:#ff7d97\">Failed: " + err.message + "</span>";
+      })
+      .then(function () { $("loadNet").disabled = false; });
+  });
+
+  var DETAIL = [
+    { label: "Fast",     gridStep: 130, scaleSteps: 3, samples: 100, refine: 8 },
+    { label: "Balanced", gridStep: 85,  scaleSteps: 4, samples: 140, refine: 12 },
+    { label: "Thorough", gridStep: 55,  scaleSteps: 6, samples: 190, refine: 18 }
+  ];
+  $("detail").addEventListener("input", function (e) { $("detailVal").textContent = DETAIL[+e.target.value].label; });
+
+  function rotationList() {
+    var mode = $("rotMode").value, out = [], i;
+    if (mode === "none") return [state.rotation];
+    if (mode === "small") { for (i = -20; i <= 20; i += 5) out.push(state.rotation + i); return out; }
+    for (i = 0; i < 360; i += 15) out.push(i);
+    return out;
+  }
+
+  $("runMatch").addEventListener("click", function () {
+    if (!skel || !skel.strokes.length) { toast("Load a logo and get a centerline first."); return; }
+    if (!netLoaded) { toast("Load the streets for this view first."); return; }
+
+    var runs = shapeRuns();
+    var d = DETAIL[+$("detail").value];
+    var target = parseFloat($("matchDist").value) || 10;
+    var targetMeters = target * ($("matchUnit").value === "mi" ? 1609.344 : 1000);
+
+    $("runMatch").disabled = true;
+    previewLayer.clearLayers();
+    $("matchResults").innerHTML = "";
+    $("matchProgress").textContent = "Starting…";
+
+    matcher.search(runs, {
+      targetMeters: targetMeters,
+      rotations: rotationList(),
+      gridStep: d.gridStep,
+      scaleMin: 0.78, scaleMax: 1.3, scaleSteps: d.scaleSteps,
+      samples: d.samples, refine: d.refine,
+      anchors: 34, maxSnap: 220
+    }, function (m) {
+      $("matchProgress").textContent = m.stage + " — " + Math.round(m.pct * 100) + "%";
+    }).then(function (out) {
+      results = out.results;
+      $("matchProgress").textContent = results.length
+        ? "Found " + results.length + " candidate" + (results.length === 1 ? "" : "s") + " in " + (out.ms / 1000).toFixed(1) + "s."
+        : "No usable placement found. " + (out.diag
+            ? "(" + out.diag.candidates + " candidates from a " + out.diag.grid + " grid, best fit " +
+              out.diag.bestCoarse + " m off-road, logo sized " + (out.diag.scaleMetres/1000).toFixed(1) + " km wide.) " : "") +
+          "Try a bigger area, a different target distance, or allowing rotation.";
+      renderResults();
+      if (results.length) selectResult(0);
+    }).catch(function (err) {
+      $("matchProgress").innerHTML = '<span style="color:#ff7d97">' + err.message + "</span>";
+    }).then(function () { $("runMatch").disabled = false; });
+  });
+
+  function quality(r) {
+    var avg = (r.coverage + r.fidelity) / 2;
+    if (avg < 30) return { cls: "good", label: "Strong match" };
+    if (avg < 60) return { cls: "ok", label: "Loose match" };
+    return { cls: "", label: "Rough match" };
+  }
+
+  function renderResults() {
+    var host = $("matchResults");
+    host.innerHTML = "";
+    results.forEach(function (r, i) {
+      var q = quality(r);
+      var el = document.createElement("div");
+      el.className = "res";
+      el.dataset.i = i;
+      el.innerHTML =
+        '<div class="top"><b>' + (r.lengthMeters / 1000).toFixed(2) + " km</b>" +
+        '<span class="q ' + q.cls + '">' + q.label + "</span></div>" +
+        '<div class="meta">' + (r.lengthMeters / 1609.344).toFixed(2) + " mi · off-shape " +
+        Math.round((r.coverage + r.fidelity) / 2) + " m · " + Math.round(r.rotation) + "°" +
+        (r.connectorMeters > 20 ? " · " + (r.connectorMeters / 1000).toFixed(1) + " km connectors" : "") +
+        "</div>" +
+        '<button class="use">Use this route</button>';
+      el.addEventListener("mouseenter", function () { previewResult(r); });
+      el.addEventListener("click", function (ev) {
+        selectResult(i);
+        if (ev.target.classList.contains("use")) applyResult(r);
+      });
+      host.appendChild(el);
+    });
+  }
+
+  function selectResult(i) {
+    Array.prototype.forEach.call($("matchResults").children, function (c, j) {
+      c.classList.toggle("sel", j === i);
+    });
+    previewResult(results[i]);
+  }
+
+  function previewResult(r) {
+    previewLayer.clearLayers();
+    if (!r) return;
+    // split geometry into solid (traced) and dashed (connector) runs
+    var cur = [], curFlag = r.connectorFlags[0];
+    function flush() {
+      if (cur.length > 1) {
+        L.polyline(cur, {
+          color: curFlag ? "#9aa0b5" : "#00e5ff",
+          weight: curFlag ? 2.5 : 4,
+          opacity: 0.95,
+          dashArray: curFlag ? "5,7" : null,
+          interactive: false
+        }).addTo(previewLayer);
+      }
+      cur = [];
+    }
+    r.geometry.forEach(function (pt, i) {
+      var f = r.connectorFlags[i];
+      if (f !== curFlag) { cur.push(pt); flush(); curFlag = f; }
+      cur.push(pt);
+    });
+    flush();
+    map.fitBounds(L.latLngBounds(r.geometry), { padding: [50, 50] });
+  }
+
+  function applyResult(r) {
+    state.center = { lat: r.center[0], lng: r.center[1] };
+    state.widthM = r.widthMeters;
+    state.rotation = r.rotation;
+    syncSizeUI();
+    $("rot").value = state.rotation;
+    $("rotVal").textContent = state.rotation.toFixed(1) + "°";
+    drawOverlay();
+    drawSkeletonOverlay();
+
+    // Seed the segment cache with the geometry the matcher actually found, so the
+    // route on screen is exactly the one that was scored — no re-routing drift.
+    // Dragging a point later re-routes just that pair through the usual path.
+    state.points = r.anchors.map(function (a) { return { lat: a[0], lng: a[1] }; });
+    state.closed = false;
+    $("closed").checked = false;
+
+    if (r.anchorIndices && r.anchorIndices.length === r.anchors.length) {
+      for (var i = 1; i < r.anchors.length; i++) {
+        var a = { lat: r.anchors[i - 1][0], lng: r.anchors[i - 1][1] };
+        var b = { lat: r.anchors[i][0], lng: r.anchors[i][1] };
+        var slice = r.geometry.slice(r.anchorIndices[i - 1], r.anchorIndices[i] + 1);
+        if (slice.length > 1) segCache[segKey(a, b, state.profile, state.snap)] = slice;
+      }
+    }
+
+    setMode("draw");
+    renderRoute();
+    save();
+    previewLayer.clearLayers();
+    toast("Loaded as an editable route — drag any point to tidy it up.");
+  }
+
+  /* -------------------------------------------------------------- restore */
+
+  (function restore() {
+    var raw;
+    try { raw = localStorage.getItem(STORE); } catch (e) { raw = null; }
+    if (raw) {
+      try {
+        var s = JSON.parse(raw);
+        Object.keys(state).forEach(function (k) { if (s[k] !== undefined) state[k] = s[k]; });
+      } catch (e) { /* ignore corrupt state */ }
+    }
+
+    if (state.segs) {
+      Object.keys(state.segs).forEach(function (k) { segCache[k] = state.segs[k]; });
+    }
+
+    map.setView([state.view.lat, state.view.lng], state.view.zoom);
+
+    $("opacity").value = Math.round(state.opacity * 100);
+    $("opacityVal").textContent = Math.round(state.opacity * 100) + "%";
+    $("rot").value = state.rotation;
+    $("rotVal").textContent = (+state.rotation).toFixed(1) + "°";
+    $("blend").value = state.blend;
+    $("invert").checked = state.invert;
+    $("punch").checked = state.punch;
+    $("snap").checked = state.snap;
+    $("profile").value = state.profile;
+    $("closed").checked = state.closed;
+    $("routeName").value = state.name || "Route Art";
+    syncSizeUI();
+    setMode(state.mode || "adjust");
+    applyImageStyle();
+
+    if (state.img) {
+      imgEl.src = state.img;
+      var ri = new Image();
+      ri.onload = function () { srcImage = ri; updateSkeleton(); };
+      ri.src = state.img;
+    }
+    drawOverlay();
+    renderRoute();
+  })();
+
+  // Debug handle — handy for tinkering from the console.
+  window.routeArt = { map: map, state: state, render: renderRoute, draw: drawOverlay,
+                      buildGpx: buildGpx, line: fullLine };
+
+  setTimeout(function () { map.invalidateSize(); drawOverlay(); }, 100);
+})();
+</script>
+</body>
+</html>
