@@ -1203,6 +1203,7 @@
         }
         el.classList.toggle("on", box.checked);
         syncPresets();
+        refreshActions();
         save();
       });
       host.appendChild(el);
@@ -1287,7 +1288,7 @@
     var b = areaBounds();
     paintAreaReadout(b);
     showNetArea(b);
-    refreshStreetsBtn(b);
+    refreshActions(b);
   }
 
   function paintAreaReadout(b) {
@@ -1385,7 +1386,7 @@
     netRect.setBounds(nb);
     updateHandles(nb);
     paintAreaReadout(nb);
-    refreshStreetsBtn(nb);
+    refreshActions(nb);
   }
 
   /* Drag anywhere inside the box to move it. */
@@ -1405,7 +1406,7 @@
       netRect.setBounds(nb);
       updateHandles(nb);
       paintAreaReadout(nb);
-      refreshStreetsBtn(nb);
+      refreshActions(nb);
     }
     function up() {
       map.off("mousemove", move);
@@ -1428,19 +1429,29 @@
               catsMatch(rawNetwork));
   }
 
-  function refreshStreetsBtn(b) {
-    var btn = $("getStreets");
-    if (!btn || busy) return;          // leave the "Downloading…" label alone
-    if (streetsReady(b)) {
-      btn.textContent = "Streets loaded — re-download";
-      btn.className = "wide ready";
+  /* Searching needs the streets in hand, so the two buttons move together: until
+     the box has been downloaded, Find routes says what's missing rather than
+     quietly kicking off a multi-megabyte download of its own. */
+  function refreshActions(b) {
+    var btnS = $("getStreets"), btnR = $("runMatch");
+    if (!btnS || !btnR) return;
+    if (busy) { btnR.disabled = true; return; }   // leave the working labels alone
+
+    var ready = streetsReady(b);
+    if (ready) {
+      btnS.textContent = "Streets loaded — re-download";
+      btnS.className = "wide ready";
     } else if (rawNetwork) {
-      btn.textContent = "Download streets for this box";
-      btn.className = "wide attn";
+      btnS.textContent = "Download streets for this box";
+      btnS.className = "wide attn";
     } else {
-      btn.textContent = "Download streets";
-      btn.className = "wide attn";
+      btnS.textContent = "Download streets";
+      btnS.className = "wide attn";
     }
+    btnS.disabled = false;
+
+    btnR.disabled = !ready;
+    btnR.textContent = ready ? "Find routes" : "Download streets first";
   }
 
   function useNetwork(raw, bounds) {
@@ -1500,7 +1511,7 @@
         graphKey = surfaceKey();
         $("netStats").textContent = describeNetwork(rawNetwork) + " Routing over " +
           info.nodes.toLocaleString() + " junctions.";
-        refreshStreetsBtn();
+        refreshActions();
       });
   }
 
@@ -1615,21 +1626,26 @@
     var range = distanceRange();
     if (!range) { toast("Set a distance range first."); return; }
 
+    if (!streetsReady()) {
+      toast("Download the streets for this box first.");
+      refreshActions();
+      return;
+    }
+
     busy = true;
     $("runMatch").disabled = true;
     previewLayer.clearLayers();
     $("matchResults").innerHTML = "";
-    setProgress("Checking the street network…");
+    setProgress("Searching…");
 
     Promise.resolve()
-      .then(function () { return ensureNetwork(false); })
       .then(function () { return ensureGraph(); })
       .then(function () { return runSearch(range); })
       .catch(function (err) { setProgress('<span style="color:#ff7d97">' + err.message + "</span>"); })
       .then(function () {
         busy = false;
         $("runMatch").disabled = false;
-        refreshStreetsBtn();
+        refreshActions();
       });
   });
 
@@ -1648,7 +1664,7 @@
       .then(function () {
         busy = false;
         $("getStreets").disabled = false;
-        refreshStreetsBtn();
+        refreshActions();
       });
   });
 
@@ -1806,6 +1822,7 @@
     renderSurfaces();
     syncSizeUI();
     setMode(state.mode || "pan");
+    refreshArea();
     applyImageStyle();
 
     if (state.img) {
