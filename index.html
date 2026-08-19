@@ -40,6 +40,9 @@
     padding:6px 9px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;
   }
   button:hover{background:#282b3a}
+  button:disabled{opacity:.5;cursor:progress;filter:saturate(.5)}
+  button:disabled:hover{background:var(--panel-2)}
+  button.primary:disabled:hover,button.attn:disabled:hover{background:var(--accent)}
   button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
   button.primary:hover{background:#8d70ff}
   button.danger:hover{border-color:var(--accent-2);color:#ff7d97}
@@ -100,6 +103,14 @@
     width:100%;height:132px;background:#0e0f16;border:1px solid var(--line);
     border-radius:9px;display:block;margin-top:10px;
   }
+  .area-handle{
+    width:12px;height:12px;border-radius:3px;background:#fff;border:2px solid var(--accent);
+    box-shadow:0 1px 5px #0009;
+  }
+  .leaflet-interactive.area-box{cursor:move}
+  button.attn{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.attn:hover{background:#8d70ff}
+  button.ready{border-color:#2c5c44;color:#6ee7a8}
   .presets{display:flex;gap:5px;margin-bottom:7px}
   .presets button{flex:1;padding:5px 4px;font-size:11px;text-align:center}
   .presets button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
@@ -197,6 +208,8 @@
       <p class="hint" id="areaHint" style="margin-top:6px">
         The dashed box is what gets searched.
       </p>
+      <button id="getStreets" class="wide attn" style="margin-top:8px">Download streets</button>
+      <p class="hint" id="netStats" style="margin-top:6px"></p>
 
       <label>Distance</label>
       <div class="row range">
@@ -231,8 +244,7 @@
           <label class="between"><span>Search effort</span><span class="val" id="detailVal">Balanced</span></label>
           <input type="range" id="detail" min="0" max="2" value="1">
 
-          <button id="reloadNet" class="wide" style="margin-top:9px">Re-download streets</button>
-          <p class="hint" id="netStats" style="margin-top:6px"></p>
+
         </div>
       </details>
 
@@ -1238,11 +1250,20 @@
       return L.latLngBounds([state.area.south, state.area.west],
                             [state.area.north, state.area.east]);
     }
-    return map.getBounds().pad(0.1);
+    return clampArea(map.getBounds().pad(0.1));
+  }
+
+  /* Never let the box exceed what can actually be downloaded — otherwise it only
+     fails at fetch time, after the wait. */
+  function clampArea(b) {
+    var out = b, guard = 0;
+    while (Matcher.areaKm2(out) > Matcher.MAX_KM2 && guard++ < 300) out = scaleBounds(out, 0.97);
+    return out;
   }
 
   function setArea(b) {
-    state.area = { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
+    var c = clampArea(b);
+    state.area = { south: c.getSouth(), west: c.getWest(), north: c.getNorth(), east: c.getEast() };
     refreshArea();
     save();
   }
@@ -1264,6 +1285,12 @@
 
   function refreshArea() {
     var b = areaBounds();
+    paintAreaReadout(b);
+    showNetArea(b);
+    refreshStreetsBtn(b);
+  }
+
+  function paintAreaReadout(b) {
     var km2 = Matcher.areaKm2(b);
     var narrowed = km2 > Matcher.NARROW_ABOVE_KM2;
     var tiles = Matcher.tileCount(b, narrowed ? state.surfaces : null);
@@ -1274,7 +1301,6 @@
       Math.round(mb) + " MB over " + tiles + " request" + (tiles === 1 ? "" : "s") +
       (narrowed ? ", limited to the surfaces you picked" : "") +
       (tiles > 1 ? ". Overpass rate-limits, so a busy moment can add a wait." : ".");
-    showNetArea(b);
   }
 
   $("areaBtns").addEventListener("click", function (e) {
@@ -1296,14 +1322,125 @@
   map.on("moveend zoomend", function () { if (!state.area) refreshArea(); });
 
   var netCache = [];          // recently downloaded areas, newest last
-  var netRect = null;         // shows which area is being searched
+  var netRect = null;         // the search box itself — drag to move, corners to resize
+  var areaHandles = [];
+  var resizingIdx = -1;
 
   function showNetArea(b) {
-    if (netRect) { map.removeLayer(netRect); netRect = null; }
-    if (!b) return;
-    netRect = L.rectangle(b, {
-      color: "#7c5cff", weight: 1, dashArray: "6,6", fill: false, interactive: false
-    }).addTo(map);
+    if (!b) { return; }
+    if (!netRect) {
+      netRect = L.rectangle(b, {
+        color: "#7c5cff", weight: 1.5, dashArray: "6,6",
+        fill: true, fillOpacity: 0.04, fillColor: "#7c5cff",
+        interactive: true, className: "area-box"
+      }).addTo(map);
+      netRect.on("mousedown", startBoxDrag);
+      netRect.on("click", function (e) { L.DomEvent.stopPropagation(e.originalEvent); });
+    } else {
+      netRect.setBounds(b);
+    }
+    updateHandles(b);
+  }
+
+  function cornersOf(b) {
+    return [[b.getSouth(), b.getWest()], [b.getSouth(), b.getEast()],
+            [b.getNorth(), b.getWest()], [b.getNorth(), b.getEast()]];
+  }
+
+  function updateHandles(b) {
+    var cs = cornersOf(b);
+    if (!areaHandles.length) {
+      cs.forEach(function (c, i) {
+        var m = L.marker(c, {
+          draggable: true,
+          zIndexOffset: 800,
+          icon: L.divIcon({ className: "", html: '<div class="area-handle"></div>',
+                            iconSize: [12, 12], iconAnchor: [6, 6] })
+        }).addTo(map);
+        m.on("dragstart", function () { resizingIdx = i; });
+        m.on("drag", function (ev) { resizeFrom(i, ev.target.getLatLng()); });
+        m.on("dragend", function () {
+          resizingIdx = -1;
+          setArea(netRect.getBounds());
+        });
+        areaHandles.push(m);
+      });
+    } else {
+      areaHandles.forEach(function (m, i) {
+        if (i !== resizingIdx) m.setLatLng(cs[i]);
+      });
+    }
+  }
+
+  function resizeFrom(i, ll) {
+    var b = netRect.getBounds();
+    var south = b.getSouth(), west = b.getWest(), north = b.getNorth(), east = b.getEast();
+    if (i === 0) { south = ll.lat; west = ll.lng; }
+    if (i === 1) { south = ll.lat; east = ll.lng; }
+    if (i === 2) { north = ll.lat; west = ll.lng; }
+    if (i === 3) { north = ll.lat; east = ll.lng; }
+    if (north - south < 0.002 || east - west < 0.002) return;
+    var nb = L.latLngBounds([south, west], [north, east]);
+    if (Matcher.areaKm2(nb) > Matcher.MAX_KM2) return;      // don't let it exceed what we can fetch
+    netRect.setBounds(nb);
+    updateHandles(nb);
+    paintAreaReadout(nb);
+    refreshStreetsBtn(nb);
+  }
+
+  /* Drag anywhere inside the box to move it. */
+  function startBoxDrag(e) {
+    L.DomEvent.stopPropagation(e.originalEvent);
+    L.DomEvent.preventDefault(e.originalEvent);
+    var start = e.latlng;
+    var b0 = netRect.getBounds();
+    var dLatSpan = b0.getNorth() - b0.getSouth(), dLonSpan = b0.getEast() - b0.getWest();
+    map.dragging.disable();
+    L.DomUtil.disableTextSelection();
+
+    function move(ev) {
+      var dLat = ev.latlng.lat - start.lat, dLng = ev.latlng.lng - start.lng;
+      var s2 = b0.getSouth() + dLat, w2 = b0.getWest() + dLng;
+      var nb = L.latLngBounds([s2, w2], [s2 + dLatSpan, w2 + dLonSpan]);
+      netRect.setBounds(nb);
+      updateHandles(nb);
+      paintAreaReadout(nb);
+      refreshStreetsBtn(nb);
+    }
+    function up() {
+      map.off("mousemove", move);
+      map.off("mouseup", up);
+      document.removeEventListener("mouseup", up);
+      map.dragging.enable();
+      L.DomUtil.enableTextSelection();
+      setArea(netRect.getBounds());
+    }
+    map.on("mousemove", move);
+    map.on("mouseup", up);
+    document.addEventListener("mouseup", up);
+  }
+
+  /* Whether the streets currently in memory match the box as it stands. */
+  function streetsReady(b) {
+    var box = b || areaBounds();
+    return !!(rawNetwork && netBounds &&
+              netBounds.toBBoxString() === box.toBBoxString() &&
+              catsMatch(rawNetwork));
+  }
+
+  function refreshStreetsBtn(b) {
+    var btn = $("getStreets");
+    if (!btn || busy) return;          // leave the "Downloading…" label alone
+    if (streetsReady(b)) {
+      btn.textContent = "Streets loaded — re-download";
+      btn.className = "wide ready";
+    } else if (rawNetwork) {
+      btn.textContent = "Download streets for this box";
+      btn.className = "wide attn";
+    } else {
+      btn.textContent = "Download streets";
+      btn.className = "wide attn";
+    }
   }
 
   function useNetwork(raw, bounds) {
@@ -1319,7 +1456,8 @@
     return raw.fixedCats.join(",") === state.surfaces.slice().sort().join(",");
   }
 
-  function ensureNetwork(force) {
+  function ensureNetwork(force, note) {
+    var say = note || setProgress;
     var b = areaBounds();
     var key = b.toBBoxString();
     if (!force) {
@@ -1329,6 +1467,7 @@
       });
       if (hit) { useNetwork(hit.raw, hit.bounds); return Promise.resolve(); }
     }
+    if (!state.area) setArea(b);          // pin it, or it drifts with the map view
     var km2 = Matcher.areaKm2(b);
     if (km2 > Matcher.MAX_KM2 * 1.05) {
       return Promise.reject(new Error("That box is " + Math.round(km2) +
@@ -1337,7 +1476,7 @@
     // Way tags are what make the surface toggles free, but they cost ~40% more
     // payload — not worth hauling across a large region.
     var cats = km2 > Matcher.NARROW_ABOVE_KM2 ? state.surfaces.slice() : null;
-    return Matcher.fetchNetwork(b, setProgress, cats).then(function (raw) {
+    return Matcher.fetchNetwork(b, say, cats).then(function (raw) {
       if (!raw.nodeCount || !raw.ways.length) throw new Error("No streets found in that box.");
       netCache.push({ raw: raw, bounds: b, key: key });
       if (netCache.length > 3) netCache.shift();
@@ -1345,21 +1484,23 @@
     });
   }
 
-  function ensureGraph() {
+  function ensureGraph(note) {
+    var say = note || setProgress;
     if (graphKey === surfaceKey() && catsMatch(rawNetwork)) return Promise.resolve();
     if (!state.surfaces.length) throw new Error("Pick at least one surface to run on.");
-    setProgress("Indexing " + state.surfaces.length + " surface type" +
-                (state.surfaces.length === 1 ? "" : "s") + "…");
+    say("Indexing " + state.surfaces.length + " surface type" +
+        (state.surfaces.length === 1 ? "" : "s") + "…");
     var g = Matcher.graphFor(rawNetwork, state.surfaces);
     if (g.lat.length < 4) {
       throw new Error("Almost nothing here matches those surfaces — try adding more.");
     }
     var c = map.getCenter();
-    return matcher.loadGraph(g, c.lat, c.lng, function (m) { setProgress(m.stage + "…"); })
+    return matcher.loadGraph(g, c.lat, c.lng, function (m) { say(m.stage + "…"); })
       .then(function (info) {
         graphKey = surfaceKey();
         $("netStats").textContent = describeNetwork(rawNetwork) + " Routing over " +
           info.nodes.toLocaleString() + " junctions.";
+        refreshStreetsBtn();
       });
   }
 
@@ -1469,7 +1610,7 @@
   }
 
   $("runMatch").addEventListener("click", function () {
-    if (busy) return;
+    if (busy) { toast("Still downloading streets — one moment."); return; }
     if (!skel || !skel.strokes.length) { toast("Drop a logo in first."); return; }
     var range = distanceRange();
     if (!range) { toast("Set a distance range first."); return; }
@@ -1485,19 +1626,30 @@
       .then(function () { return ensureGraph(); })
       .then(function () { return runSearch(range); })
       .catch(function (err) { setProgress('<span style="color:#ff7d97">' + err.message + "</span>"); })
-      .then(function () { busy = false; $("runMatch").disabled = false; });
+      .then(function () {
+        busy = false;
+        $("runMatch").disabled = false;
+        refreshStreetsBtn();
+      });
   });
 
-  $("reloadNet").addEventListener("click", function () {
-    if (busy) return;
+  function sayStreets(msg) { $("netStats").innerHTML = msg; }
+
+  $("getStreets").addEventListener("click", function () {
+    if (busy) { toast("Already working on it — watch the line below the button."); return; }
+    var force = streetsReady();          // only force when explicitly re-downloading
     busy = true;
-    $("reloadNet").disabled = true;
+    $("getStreets").disabled = true;
+    $("getStreets").textContent = "Downloading…";
     Promise.resolve()
-      .then(function () { return ensureNetwork(true); })
-      .then(function () { return ensureGraph(); })
-      .then(function () { setProgress("Streets reloaded for this view."); })
-      .catch(function (err) { setProgress('<span style="color:#ff7d97">' + err.message + "</span>"); })
-      .then(function () { busy = false; $("reloadNet").disabled = false; });
+      .then(function () { return ensureNetwork(force, sayStreets); })
+      .then(function () { return ensureGraph(sayStreets); })
+      .catch(function (err) { sayStreets('<span style="color:#ff7d97">' + err.message + "</span>"); })
+      .then(function () {
+        busy = false;
+        $("getStreets").disabled = false;
+        refreshStreetsBtn();
+      });
   });
 
   /* ---- results ---- */

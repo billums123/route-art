@@ -51,8 +51,12 @@ The dashed purple box is what gets searched, and it's set explicitly rather than
 tracking the map — so panning around, or previewing a result (which re-centres the
 map), never quietly changes what's being searched.
 
-**This view · − · + · Max.** Max snaps to the largest area that can actually be
-downloaded, about 160 km². Bigger is genuinely better: it doesn't make the logo
+**Drag the box to move it, drag a corner to resize it**, or use
+**This view · − · + · Max**. Max snaps to the largest area that can actually be
+downloaded, about 160 km², and the box is clamped so it can never ask for more
+than that. Then press **Download streets**, which reports what it has and turns
+into *Download streets for this box* whenever the box or the surface mix has moved
+on from what's loaded. Bigger is genuinely better: it doesn't make the logo
 larger, but it gives the search far more places the shape can land, and the best
 placement is usually somewhere you weren't looking. Widening from one screen to
 160 km² took a test route from 14% off-shape to 8%.

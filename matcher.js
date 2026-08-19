@@ -668,13 +668,14 @@
   function fetchTile(body, onNote, label) {
 
     // Overpass allots a couple of query slots per client and answers 504 once
-    // they're spent, so hammering it just burns the next slot too. Back off hard.
+    // they're spent, so hammering it just burns the next slot too. Back off hard,
+    // and exhaust the dependable host before the mirrors, which are often down.
     var attempts = [
       { url: ENDPOINTS[0], wait: 0 },
+      { url: ENDPOINTS[0], wait: 12000 },
+      { url: ENDPOINTS[0], wait: 30000 },
       { url: ENDPOINTS[1], wait: 1000 },
-      { url: ENDPOINTS[0], wait: 15000 },
-      { url: ENDPOINTS[2], wait: 1000 },
-      { url: ENDPOINTS[0], wait: 35000 }
+      { url: ENDPOINTS[2], wait: 1000 }
     ];
 
     var lastErr = "unknown error";
@@ -693,10 +694,20 @@
       }
       return sleep(a.wait)
         .then(function () {
+          // A wedged mirror will otherwise hang the whole chain forever.
+          var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+          var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 60000);
           return fetch(a.url, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: body
+            body: body,
+            signal: ctl ? ctl.signal : undefined
+          }).then(function (r) {
+            clearTimeout(timer);
+            return r;
+          }, function (err) {
+            clearTimeout(timer);
+            throw new Error(err && err.name === "AbortError" ? "timed out" : (err.message || "network error"));
           });
         })
         .then(function (r) {
