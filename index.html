@@ -130,6 +130,7 @@
   .res .q{font-size:10px;padding:1px 6px;border-radius:20px;background:#2f3244;color:var(--ink-dim)}
   .res .q.good{background:#12402c;color:#6ee7a8}
   .res .q.ok{background:#3d3616;color:#e8cc63}
+  .res .q.bad{background:#43202a;color:#ff9db1}
   .res .meta{color:var(--ink-dim);font-size:10.5px;margin-top:3px}
   .res .use{margin-top:6px;width:100%;font-size:11px;padding:4px}
   #cursorMode{
@@ -169,6 +170,9 @@
           <label class="between"><span>Prune corner spurs</span><span class="val" id="pruneVal">14 px</span></label>
           <input type="range" id="prune" min="0" max="60" value="14">
 
+          <label class="between"><span>Close up crossings</span><span class="val" id="mergeVal">auto</span></label>
+          <input type="range" id="merge" min="-1" max="60" value="-1">
+
           <label class="between"><span>Drop specks under</span><span class="val" id="minStrokeVal">12 px</span></label>
           <input type="range" id="minStroke" min="0" max="80" value="12">
 
@@ -187,12 +191,12 @@
 
       <label>Distance</label>
       <div class="row range">
-        <input type="number" id="distMin" value="8" step="0.5" min="0.2">
+        <input type="number" id="distMin" value="5" step="0.5" min="0.2">
         <span class="to">to</span>
-        <input type="number" id="distMax" value="12" step="0.5" min="0.2">
+        <input type="number" id="distMax" value="10" step="0.5" min="0.2">
         <select id="distUnit">
-          <option value="km">km</option>
           <option value="mi">mi</option>
+          <option value="km">km</option>
         </select>
       </div>
 
@@ -231,8 +235,8 @@
     <div class="sec">
       <h2><span class="step">3</span>Your route</h2>
       <div class="stats">
-        <div class="stat"><span>Distance</span><b id="distKm">0.00 km</b></div>
-        <div class="stat"><span>Miles</span><b id="distMi">0.00 mi</b></div>
+        <div class="stat"><span id="distPrimaryLabel">Distance</span><b id="distPrimary">0.00 mi</b></div>
+        <div class="stat"><span id="distSecondaryLabel">Kilometres</span><b id="distSecondary">0.00 km</b></div>
         <div class="stat"><span>Points</span><b id="ptCount">0</b></div>
       </div>
       <p class="hint" id="targetOut" style="margin-top:7px"></p>
@@ -349,7 +353,7 @@
     name: "Route Art",
     segs: {},
     surfaces: ["residential", "footpaths", "trails", "cycleways", "service"],
-    distMin: 8, distMax: 12, distUnit: "km"
+    distMin: 5, distMax: 10, distUnit: "mi"
   };
 
   /* ---------------------------------------------------------------- map */
@@ -581,8 +585,17 @@
 
   function updateStats(meters) {
     var km = meters / 1000, mi = meters / 1609.344;
-    $("distKm").textContent = km.toFixed(2) + " km";
-    $("distMi").textContent = mi.toFixed(2) + " mi";
+    if (unitIsMi()) {
+      $("distPrimaryLabel").textContent = "Distance";
+      $("distPrimary").textContent = mi.toFixed(2) + " mi";
+      $("distSecondaryLabel").textContent = "Kilometres";
+      $("distSecondary").textContent = km.toFixed(2) + " km";
+    } else {
+      $("distPrimaryLabel").textContent = "Distance";
+      $("distPrimary").textContent = km.toFixed(2) + " km";
+      $("distSecondaryLabel").textContent = "Miles";
+      $("distSecondary").textContent = mi.toFixed(2) + " mi";
+    }
     $("ptCount").textContent = String(state.points.length);
 
     var r = distanceRange();
@@ -754,6 +767,18 @@
   }
   function fmtLen(m) {
     return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(2) + " km";
+  }
+
+  function unitIsMi() {
+    var el = $("distUnit");
+    return el ? el.value === "mi" : true;
+  }
+
+  /* Ground distances in whatever unit the run is being measured in. */
+  function fmtGround(m) {
+    if (!unitIsMi()) return fmtLen(m);
+    var ft = m * 3.280839895;
+    return ft < 1500 ? Math.round(ft / 10) * 10 + " ft" : (m / 1609.344).toFixed(2) + " mi";
   }
   function syncSizeUI() {
     $("size").value = sizeToSlider(state.widthM);
@@ -1005,7 +1030,8 @@
   var skel = null;          // { strokes, width, height, ... }
   var skelLayer = L.layerGroup().addTo(map);
 
-  var skelOpts = { threshold: 0.5, invert: false, simplify: 1.6, minStroke: 12, prune: 14, show: true };
+  var skelOpts = { threshold: 0.5, invert: false, simplify: 1.6, minStroke: 12,
+                   prune: 14, merge: -1, show: true };
 
   function shapeToLatLng(u, v) {
     var th = state.rotation * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
@@ -1060,6 +1086,7 @@
         simplify: skelOpts.simplify,
         minStroke: skelOpts.minStroke,
         prune: skelOpts.prune,
+        merge: skelOpts.merge,
         despeckle: 24
       });
     } catch (err) {
@@ -1068,9 +1095,12 @@
     }
     Skeleton.preview(skel, cv, srcImage);
     var ms = Math.round(performance.now() - t0);
+    if (skelOpts.merge < 0) {
+      $("mergeVal").textContent = "auto — " + Math.round(skel.mergeUsed) + " px";
+    }
     $("skelStats").innerHTML = skel.strokes.length
       ? skel.strokes.length + " stroke" + (skel.strokes.length === 1 ? "" : "s") +
-        " · " + skel.pointCount + " points · " + ms + " ms" +
+        " · " + skel.pointCount + " points · pen " + Math.round(skel.strokeWidth) + " px · " + ms + " ms" +
         (skel.strokes.length > 6 ? '<br><span style="color:#e8cc63">Lots of separate strokes — the route will need connector legs between them.</span>' : "")
       : '<span style="color:#e8cc63">Nothing found — try moving the threshold or ticking the invert box.</span>';
     drawSkeletonOverlay();
@@ -1090,6 +1120,11 @@
   $("minStroke").addEventListener("input", function (e) {
     skelOpts.minStroke = +e.target.value;
     $("minStrokeVal").textContent = skelOpts.minStroke + " px";
+    scheduleSkeleton();
+  });
+  $("merge").addEventListener("input", function (e) {
+    skelOpts.merge = +e.target.value;
+    $("mergeVal").textContent = skelOpts.merge < 0 ? "auto" : skelOpts.merge + " px";
     scheduleSkeleton();
   });
   $("prune").addEventListener("input", function (e) {
@@ -1285,6 +1320,61 @@
       setProgress(m.stage + " — " + Math.round(m.pct * 100) + "%");
     }).then(function (out) {
       results = out.results;
+
+      /* Order the list the way it reads: requested distance first, then the same
+         quality tier the badge shows, then the finer score. Sorting on the raw
+         score alone put "Strong match" below "Fair match", which looks broken. */
+      var TIERS = { good: 0, ok: 1, "": 2, bad: 3 };
+      results.sort(function (a, b) {
+        if (a.inRange !== b.inRange) return a.inRange ? -1 : 1;
+        var ta = TIERS[quality(a).cls], tb = TIERS[quality(b).cls];
+        if (ta !== tb) return ta - tb;
+        return a.score - b.score;
+      });
+
+      window.routeArt.lastResults = results;
+      window.routeArt.lastSearch = out;
+
+      /* If even the best placement wanders badly, the logo is simply too small for
+         the streets here. Rather than guess at block size — sidewalks make the mesh
+         look finer than it usefully is — scale the suggestion from the error we
+         actually measured: drift shrinks roughly in proportion to the logo's size. */
+      /* Respect the range the user set, but don't silently hide a much better
+         looking route just because it fell outside it. */
+      function betterOutside() {
+        var inr = results.filter(function (r) { return r.inRange; });
+        var out2 = results.filter(function (r) { return !r.inRange; });
+        if (!inr.length || !out2.length) return "";
+        if (out2[0].score > inr[0].score * 0.8) return "";
+        var unit = $("distUnit").value;
+        var d = out2[0].lengthMeters / (unit === "mi" ? 1609.344 : 1000);
+        return '<br><span style="color:#9aa0b5">A noticeably better-looking match sits at ' +
+          d.toFixed(1) + " " + unit + ", just outside your range.</span>";
+      }
+
+      function meshNote() {
+        if (!results.length) return "";
+        var r0 = results[0];
+        var q0 = quality(r0);
+        if (q0.cls === "good" || q0.cls === "ok") return "";
+        var drift = r0.spanMeters ? r0.p90 / r0.spanMeters : 0;
+        var stray = r0.strayFraction || 0;
+        // drift falls roughly in proportion to how big the logo is drawn, so the
+        // size that would hit a clean 2.5% is a straight scaling of this one
+        var factor = Math.min(Math.max(drift / 0.025, 1.3), 4);
+        var unit = $("distUnit").value;
+        var lo = range.min * factor, hi = range.max * factor;
+        var dp = lo < 10 ? 1 : 0;
+        var sizes = " Drawn bigger — try about " + lo.toFixed(dp) + "–" + hi.toFixed(dp) +
+                    " " + unit + " here — the same shape gets much cleaner.";
+        if (q0.cls === "bad") {
+          return '<br><span style="color:#e8cc63">At ' + fmtGround(r0.spanMeters) +
+            " across, the streets here are too coarse for this logo: " +
+            Math.round(stray * 100) + "% of the run wanders off the shape." + sizes + "</span>";
+        }
+        return '<br><span style="color:#9aa0b5">These read, but they\u2019re blocky at ' +
+          fmtGround(r0.spanMeters) + " across." + sizes + "</span>";
+      }
       var hits = results.filter(function (r) { return r.inRange; }).length;
       if (!results.length) {
         setProgress("Nothing usable here. " + (out.diag
@@ -1293,10 +1383,10 @@
           "Try a larger area, a wider distance range, or allowing rotation.");
       } else if (!hits) {
         setProgress("Nothing landed inside " + range.min + "–" + range.max + " " + range.unit +
-                    ". Closest attempts below — widen the range or the area.");
+                    ". Closest attempts below — widen the range or the area." + meshNote());
       } else {
         setProgress("Found " + hits + " route" + (hits === 1 ? "" : "s") + " in range, in " +
-                    (out.ms / 1000).toFixed(1) + "s.");
+                    (out.ms / 1000).toFixed(1) + "s." + betterOutside() + meshNote());
       }
       renderResults();
       if (results.length) selectResult(0);
@@ -1337,11 +1427,16 @@
 
   /* ---- results ---- */
 
+  /* Judge a match on how far it wanders as a fraction of the logo's own size,
+     and on how much of the run isn't drawing the logo at all. A flat "under 30 m"
+     rule called a 700 m logo with 45 m of drift a strong match, which it isn't. */
   function quality(r) {
-    var avg = (r.coverage + r.fidelity) / 2;
-    if (avg < 30) return { cls: "good", label: "Strong match" };
-    if (avg < 60) return { cls: "ok", label: "Loose match" };
-    return { cls: "", label: "Rough match" };
+    var drift = r.spanMeters ? r.p90 / r.spanMeters : 1;
+    var stray = r.strayFraction === undefined ? 1 : r.strayFraction;
+    if (drift < 0.025 && stray < 0.12) return { cls: "good", label: "Strong match" };
+    if (drift < 0.045 && stray < 0.22) return { cls: "ok", label: "Fair match" };
+    if (drift < 0.075 && stray < 0.35) return { cls: "", label: "Rough match" };
+    return { cls: "bad", label: "Barely reads" };
   }
 
   function renderResults() {
@@ -1356,7 +1451,11 @@
                                : (r.lengthMeters / 1609.344).toFixed(2) + " mi";
       var el = document.createElement("div");
       el.className = "res";
-      var meta = alt + " · off-shape " + Math.round((r.coverage + r.fidelity) / 2) + " m" +
+      var drift = r.spanMeters ? Math.round(100 * r.p90 / r.spanMeters) : null;
+      var stray = r.strayFraction === undefined ? null : Math.round(100 * r.strayFraction);
+      var meta = alt + " · logo " + fmtGround(r.spanMeters || 0) + " wide" +
+        (drift === null ? "" : " · drifts " + drift + "% of that") +
+        (stray ? " · " + stray + "% off-shape" : "") +
         (Math.abs(r.rotation) >= 1 ? " · " + Math.round(r.rotation) + "°" : "") +
         (r.connectorMeters > 20 ? " · " + (r.connectorMeters / 1000).toFixed(1) + " km connectors" : "") +
         (r.inRange ? "" : " · outside your range");
@@ -1469,6 +1568,8 @@
     $("profile").value = state.profile;
     $("closed").checked = state.closed;
     $("routeName").value = state.name || "Route Art";
+    $("merge").value = skelOpts.merge;
+    $("mergeVal").textContent = skelOpts.merge < 0 ? "auto" : skelOpts.merge + " px";
     $("distMin").value = state.distMin;
     $("distMax").value = state.distMax;
     $("distUnit").value = state.distUnit;
@@ -1492,7 +1593,10 @@
 
   // Debug handle — handy for tinkering from the console.
   window.routeArt = { map: map, state: state, render: renderRoute, draw: drawOverlay,
-                      buildGpx: buildGpx, line: fullLine };
+                      buildGpx: buildGpx, line: fullLine,
+                      shapeRuns: function () { return shapeRuns(); },
+                      skel: function () { return skel; },
+                      skelOpts: skelOpts };
 
   setTimeout(function () { map.invalidateSize(); drawOverlay(); }, 100);
 })();

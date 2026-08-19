@@ -24,9 +24,10 @@ triangles.
 1. **Centerline** — the logo is thresholded to a binary mask, thinned to a
    1-pixel skeleton (Zhang-Suen), traced into polylines, and simplified. Corner
    spurs from thinning get pruned and the remaining chains spliced back together.
-2. **Distance range** — you give a min and a max. That range sets the sizes the
-   search tries, and finished routes are filtered on their real measured length.
-   Anything outside the range still gets listed, just marked and ranked below.
+2. **Distance range** — you give a min and a max (miles by default). That range
+   sets the sizes the search tries, and finished routes are filtered on their real
+   measured length. Anything outside the range still gets listed, marked and ranked
+   below.
 3. **Surfaces** — mix and match main roads, residential streets, alleys,
    footpaths, trails and bike paths, with `Walkable` / `Roads` / `Quiet` /
    `Everything` presets as starting points. Every surface type is downloaded in
@@ -47,6 +48,23 @@ triangles.
 The dashed purple rectangle on the map is the area that's been downloaded and is
 being searched. Panning inside it costs nothing; panning well outside triggers a
 fresh download. The last few areas are kept, so going back and forth is free.
+
+### Reading the results
+
+Every match reports two numbers, both relative to the logo's own size:
+
+- **drifts N% of that** — how far the route strays from the drawing at the 90th
+  percentile, as a fraction of the logo's width. Under ~2.5% reads cleanly.
+- **N% off-shape** — how much of the run isn't tracing the logo at all.
+
+Judging on absolute metres does not work: 45 m of wander is nothing on a 3 km
+logo and ruinous on a 700 m one. The mean doesn't work either — it hides a bad
+tail behind a well-behaved majority. Badges run **Strong / Fair / Rough / Barely
+reads**, and if the best result is still poor the tool says so and suggests the
+size that would fix it.
+
+**The single biggest lever is drawing it bigger.** A logo spanning 15+ blocks
+reads; one spanning 6 cannot, no matter how good the search is.
 
 ### Drawing order
 
@@ -73,6 +91,10 @@ still draws the shape correctly, rather than cutting across it with a dead leg.
   between disconnected parts of the artwork. Fewer, longer strokes are better.
 - **Ink threshold** is the first thing to adjust if the centerline looks wrong,
   then **prune corner spurs** if you get stubby branches at stroke ends.
+- **Close up crossings** merges the twin junctions that thinning leaves wherever
+  two strokes cross, so they meet at a point instead of being joined by a short
+  bridge. It sizes itself from the detected pen thickness; raise it if crossings
+  still look separated, drop it to zero to leave them alone.
 
 ## Running it
 

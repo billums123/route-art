@@ -275,7 +275,7 @@
 
   /* Thinning leaves short spurs at corners and stroke ends. Drop the stubby ones,
      then splice what's left back into long continuous chains. */
-  function pruneAndMerge(paths, pruneLen) {
+  function pruneAndMerge(paths, pruneLen, bridgeLen) {
     var edges = paths.map(function (p) { return { pts: p, dead: false }; });
     function key(pt) { return pt[0] + "," + pt[1]; }
 
@@ -306,6 +306,36 @@
         var dangling = (d0 === 1 || d1 === 1);
         var rooted = (d0 > 1 || d1 > 1);
         if (dangling && rooted && polyLen(e.pts) < pruneLen) { e.dead = true; changed = true; }
+      }
+    }
+
+    /* Where two strokes cross, the ink is one thick blob, and thinning splits that
+       crossing into two Y-junctions joined by a short stub. Contract those stubs so
+       the strokes meet at a single point, the way they do in the artwork. */
+    changed = true; guard = 0;
+    while (changed && guard++ < 200) {
+      changed = false;
+      var adjB = adjacency();
+      for (var b = 0; b < edges.length; b++) {
+        var eb = edges[b];
+        if (eb.dead) continue;
+        var ka = key(eb.pts[0]), kb = key(eb.pts[eb.pts.length - 1]);
+        if (ka === kb) continue;
+        var da = (adjB.get(ka) || []).length, db = (adjB.get(kb) || []).length;
+        if (da < 3 || db < 3) continue;                  // both ends must be junctions
+        if (polyLen(eb.pts) > bridgeLen) continue;
+        var pA = eb.pts[0], pB = eb.pts[eb.pts.length - 1];
+        var M = [Math.round((pA[0] + pB[0]) / 2), Math.round((pA[1] + pB[1]) / 2)];
+        eb.dead = true;
+        for (var f = 0; f < edges.length; f++) {
+          var ef = edges[f];
+          if (ef.dead) continue;
+          var last = ef.pts.length - 1;
+          if (key(ef.pts[0]) === ka || key(ef.pts[0]) === kb) ef.pts[0] = M.slice();
+          if (key(ef.pts[last]) === ka || key(ef.pts[last]) === kb) ef.pts[last] = M.slice();
+        }
+        changed = true;
+        break;
       }
     }
 
@@ -346,15 +376,31 @@
       minStroke: opts.minStroke !== undefined ? opts.minStroke : 12,
       simplify: opts.simplify !== undefined ? opts.simplify : 1.6,
       despeckle: opts.despeckle !== undefined ? opts.despeckle : 24,
-      prune: opts.prune !== undefined ? opts.prune : 14
+      prune: opts.prune !== undefined ? opts.prune : 14,
+      merge: opts.merge          // undefined or negative sizes it from the artwork
     };
 
     var r = toMask(img, o);
     if (o.despeckle > 0) removeSmallBlobs(r.mask, r.w, r.h, o.despeckle);
+
+    var inkArea = 0;
+    for (var m = 0; m < r.mask.length; m++) if (r.mask[m]) inkArea++;
+
     thin(r.mask, r.w, r.h);
 
     var raw = trace(r.mask, r.w, r.h);
-    raw = pruneAndMerge(raw, o.prune);
+
+    // A filled stroke of length L and width W covers L*W pixels, so dividing the ink
+    // area by the skeleton length recovers the pen thickness the logo was drawn with.
+    var skelLen = 0;
+    for (var q = 0; q < raw.length; q++) skelLen += polyLen(raw[q]);
+    var strokeWidth = skelLen > 0 ? inkArea / skelLen : 0;
+
+    var bridge = (o.merge === undefined || o.merge === null || o.merge < 0)
+      ? strokeWidth * 1.5
+      : o.merge;
+
+    raw = pruneAndMerge(raw, o.prune, bridge);
     var strokes = [];
     for (var i = 0; i < raw.length; i++) {
       if (polyLen(raw[i]) < o.minStroke) continue;
@@ -374,6 +420,8 @@
       width: r.srcW,
       height: r.srcH,
       inkRatio: r.inkRatio,
+      strokeWidth: strokeWidth,
+      mergeUsed: bridge,
       totalLength: totalLen,          // in source-image pixels
       pointCount: strokes.reduce(function (n, s2) { return n + s2.length; }, 0)
     };
