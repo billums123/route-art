@@ -125,14 +125,26 @@ still draws the shape correctly, rather than cutting across it with a dead leg.
 
 ## Running it
 
-Export the GPX, then load it as a route/course:
+Export the GPX, then load it somewhere that can navigate it:
 
-- **COROS** — COROS app → Route Library → import GPX → sync to watch
+- **Strava** — Dashboard → My Routes → Create New Route → upload the GPX
+  (route upload is a subscriber feature). From there it syncs to most watches.
 - **Garmin** — Garmin Connect → Training → Courses → Import → send to device
-- Run it with navigation on. The activity syncs to Strava as usual.
+- **COROS** — COROS app → Route Library → import GPX → sync to watch
+- **Apple Watch** — Apple's built-in Workout app cannot follow a GPX route.
+  [WorkOutDoors](https://www.workoutdoors.net/) (one-off ~$9) is the usual
+  answer: it loads GPX/TCX/FIT, draws the route on an offline vector map on the
+  watch, gives turn-by-turn and off-route alerts. Komoot's watch app will also
+  navigate an imported GPX with turn prompts.
+- **No watch at all** — navigate on your phone. Any GPX app (Strava, Komoot,
+  Gaia, OsmAnd) will show the line and your position on it, which is all this
+  needs; the route is drawn on streets, so it's hard to lose.
 
-Strava has no GPX-to-route import, so the watch is the path in. Don't upload the
-GPX to Strava directly — that would post a ride you didn't do.
+Then run it with navigation on and let the activity upload as normal.
+
+One distinction worth keeping straight: importing the GPX as a **route** is
+planning the run. Uploading it at `strava.com/upload` creates an **activity** —
+that would post a run you never did. Use My Routes, not Upload.
 
 ## Files
 
