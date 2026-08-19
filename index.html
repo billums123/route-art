@@ -222,6 +222,16 @@
         </select>
       </div>
 
+      <label>Trace on</label>
+      <div class="presets" id="traceMode">
+        <button data-mode="streets" aria-pressed="true">Streets</button>
+        <button data-mode="open" aria-pressed="false">Open ground</button>
+      </div>
+      <p class="hint" id="traceHint" style="margin:-2px 0 8px">
+        Snapped to roads and paths.
+      </p>
+
+      <div id="streetOpts">
       <label>Run on</label>
       <div class="presets" id="presets">
         <button data-preset="walkable">Walkable</button>
@@ -230,6 +240,12 @@
         <button data-preset="all">Everything</button>
       </div>
       <div class="chips" id="surfaces"></div>
+      </div>
+
+      <div id="openOpts" style="display:none">
+        <label class="between"><span>Smallest space to consider</span><span class="val" id="minAreaVal">2 ha</span></label>
+        <input type="range" id="minArea" min="0" max="40" value="8">
+      </div>
 
       <details>
         <summary>Search options</summary>
@@ -377,7 +393,9 @@
     segs: {},
     surfaces: ["residential", "footpaths", "trails", "cycleways", "service"],
     distMin: 5, distMax: 10, distUnit: "mi",
-    area: null            // {south,west,north,east}; null follows the map view
+    area: null,           // {south,west,north,east}; null follows the map view
+    trace: "streets",     // "streets" | "open"
+    minAreaHa: 2
   };
 
   /* ---------------------------------------------------------------- map */
@@ -1162,6 +1180,7 @@
 
   var matcher = Matcher.create();
   var rawNetwork = null;     // the parsed Overpass payload, all surfaces
+  var openPolys = null;      // open-ground polygons, when tracing on grass
   var netBounds = null;      // the area that payload covers
   var graphKey = null;       // surface mix the worker's graph was built from
   var results = [];
@@ -1226,11 +1245,56 @@
     if (!b || !b.dataset.preset) return;
     state.surfaces = Matcher.PRESETS[b.dataset.preset].slice();
     renderSurfaces();
-    refreshArea();
+    refreshActions();
+    save();
+  });
+
+  /* ---- trace mode: snapped to streets, or drawn freely on open ground ---- */
+
+  function isOpen() { return state.trace === "open"; }
+
+  function setTrace(mode) {
+    state.trace = mode;
+    Array.prototype.forEach.call($("traceMode").children, function (b) {
+      b.setAttribute("aria-pressed", b.dataset.mode === mode);
+    });
+    $("streetOpts").style.display = mode === "open" ? "none" : "";
+    $("openOpts").style.display = mode === "open" ? "" : "none";
+    $("traceHint").innerHTML = mode === "open"
+      ? "Drawn exactly as-is inside a park or field — no streets, so the shape comes out clean. Routes are shorter, and it's on you to check the ground is open to the public."
+      : "Snapped to roads and paths.";
+    rawNetwork = null;                 // the two modes need different data
+    openPolys = null;
+    graphKey = null;
+    matcher.ready = false;
+    refreshActions();
+    save();
+  }
+
+  $("traceMode").addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b || !b.dataset.mode || b.dataset.mode === state.trace) return;
+    setTrace(b.dataset.mode);
+  });
+
+  $("minArea").addEventListener("input", function (e) {
+    state.minAreaHa = +e.target.value / 4;
+    $("minAreaVal").textContent = state.minAreaHa < 1
+      ? Math.round(state.minAreaHa * 10000) + " m²"
+      : state.minAreaHa.toFixed(state.minAreaHa < 10 ? 1 : 0) + " ha";
+    openPolys = null;
+    refreshActions();
     save();
   });
 
   /* ---- network: fetched once for the area, filtered locally per mix ---- */
+
+  function describeOpen(polys) {
+    var big = polys.slice(0, 3).map(function (p2) {
+      return (p2.name || p2.kind) + " (" + (Matcher.polygonAreaM2(p2.pts) / 10000).toFixed(1) + " ha)";
+    });
+    return polys.length.toLocaleString() + " open spaces found. Largest: " + big.join(", ") + ".";
+  }
 
   function describeNetwork(raw) {
     if (raw.fixedCats) {
@@ -1426,9 +1490,9 @@
   /* Whether the streets currently in memory match the box as it stands. */
   function streetsReady(b) {
     var box = b || areaBounds();
-    return !!(rawNetwork && netBounds &&
-              netBounds.toBBoxString() === box.toBBoxString() &&
-              catsMatch(rawNetwork));
+    if (!netBounds || netBounds.toBBoxString() !== box.toBBoxString()) return false;
+    if (isOpen()) return !!(openPolys && openPolys.minAreaHa === state.minAreaHa);
+    return !!(rawNetwork && catsMatch(rawNetwork));
   }
 
   /* Searching needs the streets in hand, so the two buttons move together: until
@@ -1439,21 +1503,22 @@
     if (!btnS || !btnR) return;
     if (busy) { btnR.disabled = true; return; }   // leave the working labels alone
 
+    var noun = isOpen() ? "open ground" : "streets";
     var ready = streetsReady(b);
     if (ready) {
-      btnS.textContent = "Streets loaded — re-download";
+      btnS.textContent = (isOpen() ? "Open ground" : "Streets") + " loaded — re-download";
       btnS.className = "wide ready";
-    } else if (rawNetwork) {
-      btnS.textContent = "Download streets for this box";
+    } else if (rawNetwork || openPolys) {
+      btnS.textContent = "Download " + noun + " for this box";
       btnS.className = "wide attn";
     } else {
-      btnS.textContent = "Download streets";
+      btnS.textContent = "Download " + noun;
       btnS.className = "wide attn";
     }
     btnS.disabled = false;
 
     btnR.disabled = !ready;
-    btnR.textContent = ready ? "Find routes" : "Download streets first";
+    btnR.textContent = ready ? "Find routes" : "Download " + noun + " first";
   }
 
   function useNetwork(raw, bounds) {
@@ -1486,6 +1551,21 @@
       return Promise.reject(new Error("That box is " + Math.round(km2) +
         " km², past what OpenStreetMap will serve. Press Max to snap it to the limit."));
     }
+    if (isOpen()) {
+      var minM2 = state.minAreaHa * 10000;
+      return Matcher.fetchOpenSpace(b, say, minM2).then(function (polys) {
+        if (!polys.length) {
+          throw new Error("No open ground of that size in this box — shrink the minimum, or move the box.");
+        }
+        openPolys = { polys: polys, minAreaHa: state.minAreaHa };
+        rawNetwork = null;
+        netBounds = b;
+        graphKey = null;
+        showNetArea(b);
+        $("netStats").textContent = describeOpen(polys);
+      });
+    }
+
     // Way tags are what make the surface toggles free, but they cost ~40% more
     // payload — not worth hauling across a large region.
     var cats = km2 > Matcher.NARROW_ABOVE_KM2 ? state.surfaces.slice() : null;
@@ -1499,6 +1579,20 @@
 
   function ensureGraph(note) {
     var say = note || setProgress;
+
+    if (isOpen()) {
+      if (graphKey === "open:" + state.minAreaHa && matcher.ready) return Promise.resolve();
+      if (!openPolys) throw new Error("Download the open ground first.");
+      var c2 = map.getCenter();
+      return matcher.loadPolys(openPolys.polys, c2.lat, c2.lng, function (m) { say(m.stage + "…"); })
+        .then(function (info) {
+          graphKey = "open:" + state.minAreaHa;
+          $("netStats").textContent = describeOpen(openPolys.polys) +
+            " Widest clear span " + info.widest + " m.";
+          refreshActions();
+        });
+    }
+
     if (graphKey === surfaceKey() && catsMatch(rawNetwork)) return Promise.resolve();
     if (!state.surfaces.length) throw new Error("Pick at least one surface to run on.");
     say("Indexing " + state.surfaces.length + " surface type" +
@@ -1538,6 +1632,18 @@
 
   function runSearch(range) {
     var d = DETAIL[+$("detail").value];
+
+    if (isOpen()) {
+      return matcher.searchOpen(shapeRuns(), {
+        minMeters: range.minMeters,
+        maxMeters: range.maxMeters,
+        rotations: rotationList(),
+        margin: 8
+      }, function (m) {
+        setProgress(m.stage + " — " + Math.round(m.pct * 100) + "%");
+      }).then(function (out) { return showResults(out, range); });
+    }
+
     return matcher.search(shapeRuns(), {
       minMeters: range.minMeters,
       maxMeters: range.maxMeters,
@@ -1547,7 +1653,11 @@
       anchors: 34, maxSnap: 220
     }, function (m) {
       setProgress(m.stage + " — " + Math.round(m.pct * 100) + "%");
-    }).then(function (out) {
+    }).then(function (out) { return showResults(out, range); });
+  }
+
+  function showResults(out, range) {
+    {
       results = out.results;
 
       /* Order the list the way it reads: requested distance first, then the same
@@ -1571,6 +1681,7 @@
       /* Respect the range the user set, but don't silently hide a much better
          looking route just because it fell outside it. */
       function betterOutside() {
+        if (results.length && results[0].openGround) return "";   // all traces are exact
         var inr = results.filter(function (r) { return r.inRange; });
         var out2 = results.filter(function (r) { return !r.inRange; });
         if (!inr.length || !out2.length) return "";
@@ -1584,6 +1695,7 @@
       function meshNote() {
         if (!results.length) return "";
         var r0 = results[0];
+        if (r0.openGround) return "";
         var q0 = quality(r0);
         if (q0.cls === "good" || q0.cls === "ok") return "";
         var drift = r0.spanMeters ? r0.p90 / r0.spanMeters : 0;
@@ -1619,7 +1731,7 @@
       }
       renderResults();
       if (results.length) selectResult(0);
-    });
+    }
   }
 
   $("runMatch").addEventListener("click", function () {
@@ -1676,6 +1788,7 @@
      and on how much of the run isn't drawing the logo at all. A flat "under 30 m"
      rule called a 700 m logo with 45 m of drift a strong match, which it isn't. */
   function quality(r) {
+    if (r.openGround) return { cls: "good", label: "Exact trace" };
     var drift = r.spanMeters ? r.p90 / r.spanMeters : 1;
     var stray = r.strayFraction === undefined ? 1 : r.strayFraction;
     if (drift < 0.025 && stray < 0.12) return { cls: "good", label: "Strong match" };
@@ -1696,6 +1809,26 @@
                                : (r.lengthMeters / 1609.344).toFixed(2) + " mi";
       var el = document.createElement("div");
       el.className = "res";
+      if (r.openGround) {
+        var elO = document.createElement("div");
+        elO.className = "res";
+        elO.innerHTML =
+          '<div class="top"><b>' + dist + "</b>" +
+          '<span class="q good">Exact trace</span></div>' +
+          '<div class="meta">' + alt + " · in " + (r.place || "open ground") +
+          " · " + fmtGround(r.spanMeters || 0) + " across · " + r.clearance + " m clear" +
+          (Math.abs(r.rotation) >= 1 ? " · " + Math.round(r.rotation) + "°" : "") +
+          (r.inRange ? "" : " · outside your range") + "</div>" +
+          '<button class="use">Use this route</button>';
+        if (!r.inRange) elO.style.opacity = "0.72";
+        elO.addEventListener("mouseenter", function () { previewResult(r); });
+        elO.addEventListener("click", function (ev) {
+          selectResult(i);
+          if (ev.target.classList.contains("use")) applyResult(r);
+        });
+        host.appendChild(elO);
+        return;
+      }
       var drift = r.spanMeters ? Math.round(100 * r.p90 / r.spanMeters) : null;
       var stray = r.strayFraction === undefined ? null : Math.round(100 * r.strayFraction);
       var meta = alt + " · logo " + fmtGround(r.spanMeters || 0) + " wide" +
@@ -1764,9 +1897,19 @@
     // Seed the segment cache with the geometry the matcher actually found, so the
     // route on screen is exactly the one that was scored — no re-routing drift.
     // Dragging a point later re-routes just that pair through the usual path.
-    state.points = r.anchors.map(function (a) { return { lat: a[0], lng: a[1] }; });
+    if (!r.openGround) {
+      state.points = r.anchors.map(function (a) { return { lat: a[0], lng: a[1] }; });
+    }
     state.closed = false;
     $("closed").checked = false;
+
+    if (r.openGround) {
+      // The drawing IS the route here, so keep the points joined by straight
+      // lines — snapping them to roads would undo the whole point of this mode.
+      state.snap = false;
+      $("snap").checked = false;
+      state.points = decimate(r.geometry, 60).map(function (a) { return { lat: a[0], lng: a[1] }; });
+    }
 
     if (r.anchorIndices && r.anchorIndices.length === r.anchors.length) {
       for (var i = 1; i < r.anchors.length; i++) {
@@ -1824,6 +1967,11 @@
     renderSurfaces();
     syncSizeUI();
     setMode(state.mode || "pan");
+    $("minArea").value = Math.round((state.minAreaHa || 2) * 4);
+    $("minAreaVal").textContent = (state.minAreaHa || 2) < 1
+      ? Math.round((state.minAreaHa || 2) * 10000) + " m²"
+      : (state.minAreaHa || 2).toFixed((state.minAreaHa || 2) < 10 ? 1 : 0) + " ha";
+    setTrace(state.trace || "streets");
     refreshArea();
     applyImageStyle();
 
@@ -1841,6 +1989,9 @@
   window.routeArt = { map: map, state: state, render: renderRoute, draw: drawOverlay,
                       buildGpx: buildGpx, line: fullLine,
                       shapeRuns: function () { return shapeRuns(); },
+                      matcher: function () { return matcher; },
+                      openPolys: function () { return openPolys; },
+                      graphKey: function () { return graphKey; },
                       skel: function () { return skel; },
                       skelOpts: skelOpts };
 

@@ -47,6 +47,29 @@ triangles.
      much of the drawing it covers, and how much detour it racks up.
 5. **Export** — GPX track, ready for a watch.
 
+### Streets, or open ground
+
+**Trace on: Streets / Open ground.**
+
+On *streets* the drawing is snapped to roads and paths, which is what makes a
+big-city route possible — and why the shape comes out as a staircase.
+
+On *open ground* the route is the drawing. It searches parks, playing fields,
+recreation grounds and greens for somewhere the shape fits with room to spare,
+then traces it exactly — no routing, no staircase, no compromise. Every result
+names the space it found and how much clearance it has, e.g. *"in Liberty Park ·
+0.29 mi across · 120 m clear"*.
+
+The trade-off is length. A 40 ha park fits a drawing about 500 m across, which
+is a route of roughly one mile. Street routes run to ten or twenty. So: open
+ground for a clean shape, streets for distance.
+
+Two things worth knowing. Cemeteries are excluded deliberately; golf courses are
+included but are usually private, which is exactly why results name the place —
+**checking that the ground is open to you is your call, not the tool's.** And
+applying an open-ground result turns road-snapping off, since snapping the points
+back to streets would undo the whole point.
+
 ### The search area
 
 The dashed purple box is what gets searched, and it's set explicitly rather than
@@ -154,6 +177,7 @@ that would post a run you never did. Use My Routes, not Upload.
 | `skeleton.js` | Image → binary mask → thinning → traced polylines → drawing order |
 | `matcher.js` | Overpass fetch, graph building, and the search worker |
 | `samples/` | Test artwork |
+| — | open-ground mode reuses the same distance transform, inverted: clearance from the edge of a park rather than distance to the nearest road |
 | `vendor/leaflet/` | Leaflet, vendored so the page has no CDN dependency |
 
 `window.routeArt` exposes the map, state, and `buildGpx()` for poking from the

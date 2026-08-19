@@ -189,6 +189,95 @@
 "  return { path: path, dist: _dist[dst] };",
 "}",
 "",
+"/* ------------------------------------------------- open ground (parks) */",
+"var P = null;   // clearance field: metres from the nearest edge of open ground",
+"",
+"/* Scanline-fill the polygons, then run the same distance transform inverted, so",
+"   every cell records how far it is from the nearest edge. A drawing fits wherever",
+"   the clearance beats its own radius — no routing involved, the shape is traced",
+"   exactly as drawn. */",
+"function buildInsideField(polys, cell){",
+"  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, i, j, k;",
+"  for (i = 0; i < polys.length; i++){",
+"    var pp = polys[i].pts;",
+"    for (j = 0; j < pp.length; j++){",
+"      if (pp[j][0] < minX) minX = pp[j][0]; if (pp[j][0] > maxX) maxX = pp[j][0];",
+"      if (pp[j][1] < minY) minY = pp[j][1]; if (pp[j][1] > maxY) maxY = pp[j][1];",
+"    }",
+"  }",
+"  if (!isFinite(minX)) return null;",
+"  minX -= cell * 2; minY -= cell * 2; maxX += cell * 2; maxY += cell * 2;",
+"  var gw = Math.max(2, Math.ceil((maxX - minX) / cell));",
+"  var gh = Math.max(2, Math.ceil((maxY - minY) / cell));",
+"  var owner = new Int32Array(gw * gh).fill(-1);",
+"  var grid = new Float64Array(gw * gh);",
+"  var INF = 1e12;",
+"",
+"  for (i = 0; i < polys.length; i++){",
+"    var pts = polys[i].pts;",
+"    if (pts.length < 3) continue;",
+"    var pMinY = Infinity, pMaxY = -Infinity;",
+"    for (j = 0; j < pts.length; j++){",
+"      if (pts[j][1] < pMinY) pMinY = pts[j][1];",
+"      if (pts[j][1] > pMaxY) pMaxY = pts[j][1];",
+"    }",
+"    var y0 = Math.max(0, Math.floor((pMinY - minY) / cell));",
+"    var y1 = Math.min(gh - 1, Math.ceil((pMaxY - minY) / cell));",
+"    var xs = [];",
+"    for (var gy = y0; gy <= y1; gy++){",
+"      var wy = minY + (gy + 0.5) * cell;",
+"      xs.length = 0;",
+"      for (k = 0; k < pts.length; k++){",
+"        var a = pts[k], b = pts[(k + 1) % pts.length];",
+"        if ((a[1] <= wy && b[1] > wy) || (b[1] <= wy && a[1] > wy)){",
+"          xs.push(a[0] + (wy - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));",
+"        }",
+"      }",
+"      if (xs.length < 2) continue;",
+"      xs.sort(function(m,n){ return m - n; });",
+"      for (k = 0; k + 1 < xs.length; k += 2){",
+"        var gx0 = Math.max(0, Math.ceil((xs[k] - minX) / cell - 0.5));",
+"        var gx1 = Math.min(gw - 1, Math.floor((xs[k+1] - minX) / cell - 0.5));",
+"        for (var gx = gx0; gx <= gx1; gx++) owner[gy * gw + gx] = i;",
+"      }",
+"    }",
+"  }",
+"",
+"  for (i = 0; i < grid.length; i++) grid[i] = owner[i] >= 0 ? INF : 0;",
+"",
+"  var maxDim = Math.max(gw, gh);",
+"  var f = new Float64Array(maxDim), d = new Float64Array(maxDim);",
+"  var v = new Int32Array(maxDim), z = new Float64Array(maxDim + 1);",
+"  var x, y;",
+"  for (x = 0; x < gw; x++){",
+"    for (y = 0; y < gh; y++) f[y] = grid[y*gw + x];",
+"    dt1d(f, gh, d, v, z);",
+"    for (y = 0; y < gh; y++) grid[y*gw + x] = d[y];",
+"  }",
+"  for (y = 0; y < gh; y++){",
+"    for (x = 0; x < gw; x++) f[x] = grid[y*gw + x];",
+"    dt1d(f, gw, d, v, z);",
+"    for (x = 0; x < gw; x++) grid[y*gw + x] = d[x];",
+"  }",
+"  var field = new Float32Array(gw * gh);",
+"  for (i = 0; i < field.length; i++) field[i] = Math.sqrt(grid[i]) * cell;",
+"  return { field: field, owner: owner, gw: gw, gh: gh, cell: cell, minX: minX, minY: minY };",
+"}",
+"",
+"function clearanceAt(x, y){",
+"  var gx = ((x - P.minX) / P.cell) | 0;",
+"  var gy = ((y - P.minY) / P.cell) | 0;",
+"  if (gx < 0 || gy < 0 || gx >= P.gw || gy >= P.gh) return 0;",
+"  return P.field[gy * P.gw + gx];",
+"}",
+"",
+"function ownerAt(x, y){",
+"  var gx = ((x - P.minX) / P.cell) | 0;",
+"  var gy = ((y - P.minY) / P.cell) | 0;",
+"  if (gx < 0 || gy < 0 || gx >= P.gw || gy >= P.gh) return -1;",
+"  return P.owner[gy * P.gw + gx];",
+"}",
+"",
 "/* ---------------------------------------------------------- shape utils */",
 "function resample(runs, spacing){",
 "  var out = [];",
@@ -240,13 +329,13 @@
 "  var m = ev.data;",
 "",
 "  if (m.cmd === 'setGraph'){",
-"    var P = projSetup(m.lat0, m.lon0);",
+"    var proj = projSetup(m.lat0, m.lon0);",
 "    var n = m.lat.length;",
 "    var x = new Float64Array(n), y = new Float64Array(n);",
 "    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;",
 "    for (var i = 0; i < n; i++){",
-"      x[i] = (m.lon[i] - P.lon0) * P.mPerLon;",
-"      y[i] = (m.lat[i] - P.lat0) * P.mPerLat;",
+"      x[i] = (m.lon[i] - proj.lon0) * proj.mPerLon;",
+"      y[i] = (m.lat[i] - proj.lat0) * proj.mPerLat;",
 "      if (x[i] < minX) minX = x[i]; if (x[i] > maxX) maxX = x[i];",
 "      if (y[i] < minY) minY = y[i]; if (y[i] > maxY) maxY = y[i];",
 "    }",
@@ -265,7 +354,7 @@
 "      tgt[cursor[b]] = a; w[cursor[b]++] = d;",
 "    }",
 "    G = { n: n, x: x, y: y, off: off, tgt: tgt, w: w,",
-"          minX: minX, minY: minY, maxX: maxX, maxY: maxY, P: P };",
+"          minX: minX, minY: minY, maxX: maxX, maxY: maxY, P: proj };",
 "    post({ type: 'progress', pct: 0.2, stage: 'Building distance field' });",
 "    var span = Math.max(maxX - minX, maxY - minY);",
 "    var cell = Math.max(6, span / 1100);",
@@ -273,6 +362,134 @@
 "    G.hash = buildHash(120);",
 "    post({ type: 'graphReady', nodes: n, edges: m2, cell: cell, gw: F.gw, gh: F.gh,",
 "           spanX: maxX - minX, spanY: maxY - minY });",
+"    return;",
+"  }",
+"",
+"  if (m.cmd === 'setPolys'){",
+"    var Pj = projSetup(m.lat0, m.lon0);",
+"    var polys = [];",
+"    for (var pi2 = 0; pi2 < m.polys.length; pi2++){",
+"      var src = m.polys[pi2];",
+"      var pts = [];",
+"      for (var q3 = 0; q3 < src.pts.length; q3++){",
+"        pts.push([(src.pts[q3][1] - Pj.lon0) * Pj.mPerLon,",
+"                  (src.pts[q3][0] - Pj.lat0) * Pj.mPerLat]);",
+"      }",
+"      polys.push({ pts: pts, name: src.name, kind: src.kind });",
+"    }",
+"    post({ type:'progress', pct: 0.3, stage: 'Mapping the open ground' });",
+"    P = buildInsideField(polys, 5);",
+"    if (!P){ post({ type:'error', message:'No open ground found in that box.' }); return; }",
+"    G = { P: Pj, polys: polys };",
+"    var deepest = 0;",
+"    for (var f2 = 0; f2 < P.field.length; f2++) if (P.field[f2] > deepest) deepest = P.field[f2];",
+"    post({ type:'polysReady', count: polys.length, cell: P.cell,",
+"           gw: P.gw, gh: P.gh, widest: Math.round(deepest * 2) });",
+"    return;",
+"  }",
+"",
+"  if (m.cmd === 'searchOpen'){",
+"    if (!P || !G || !G.polys){ post({ type:'error', message:'No open ground loaded.' }); return; }",
+"    var t1 = Date.now();",
+"    var runsO = m.runs, optsO = m.opts;",
+"",
+"    var shapeLenO = 0, rr3, ii3;",
+"    for (rr3 = 0; rr3 < runsO.length; rr3++)",
+"      for (ii3 = 1; ii3 < runsO[rr3].length; ii3++)",
+"        shapeLenO += Math.hypot(runsO[rr3][ii3][0]-runsO[rr3][ii3-1][0],",
+"                                runsO[rr3][ii3][1]-runsO[rr3][ii3-1][1]);",
+"    if (shapeLenO <= 0){ post({ type:'error', message:'The skeleton is empty.' }); return; }",
+"",
+"    var sampO = resample(runsO, shapeLenO / 120).map(function(s3){ return s3.p; });",
+"    var radiusUnits = 0;",
+"    for (var s4 = 0; s4 < sampO.length; s4++){",
+"      var rr4 = Math.hypot(sampO[s4][0], sampO[s4][1]);",
+"      if (rr4 > radiusUnits) radiusUnits = rr4;",
+"    }",
+"",
+"    // On open ground the route IS the drawing, so its length is exactly the",
+"    // shape length at that size — no detour to allow for.",
+"    var sHiO = optsO.maxMeters / shapeLenO;",
+"    var sLoO = optsO.minMeters / shapeLenO;",
+"    var margin = optsO.margin === undefined ? 8 : optsO.margin;",
+"    var steps = 9;",
+"    var found = [];",
+"    var seen = {};",
+"",
+"    for (var si2 = 0; si2 < steps; si2++){",
+"      // largest first: a bigger drawing is a better drawing",
+"      var S2 = sHiO - (sHiO - sLoO) * (si2 / (steps - 1));",
+"      var needR = S2 * radiusUnits + margin;",
+"      var stride = Math.max(1, Math.round(needR / (P.cell * 3)));",
+"      for (var gy2 = 0; gy2 < P.gh; gy2 += stride){",
+"        for (var gx2 = 0; gx2 < P.gw; gx2 += stride){",
+"          if (P.field[gy2 * P.gw + gx2] < needR) continue;      // can't possibly fit",
+"          var cx2 = P.minX + (gx2 + 0.5) * P.cell;",
+"          var cy2 = P.minY + (gy2 + 0.5) * P.cell;",
+"          for (var ri2 = 0; ri2 < optsO.rotations.length; ri2++){",
+"            var th3 = optsO.rotations[ri2] * Math.PI / 180;",
+"            var cos3 = Math.cos(th3), sin3 = Math.sin(th3);",
+"            var worst = Infinity;",
+"            for (var k4 = 0; k4 < sampO.length; k4++){",
+"              var pl = place(sampO[k4][0], sampO[k4][1], S2, cos3, sin3, cx2, cy2);",
+"              var cl = clearanceAt(pl[0], pl[1]);",
+"              if (cl < worst) worst = cl;",
+"              if (worst < margin) break;",
+"            }",
+"            if (worst < margin) continue;",
+"            var own = ownerAt(cx2, cy2);",
+"            var key2 = own + ':' + Math.round(cx2 / 200) + ':' + Math.round(cy2 / 200);",
+"            if (seen[key2]) continue;",
+"            seen[key2] = 1;",
+"            found.push({ cx: cx2, cy: cy2, S: S2, rot: optsO.rotations[ri2],",
+"                         clear: worst, owner: own });",
+"            break;",
+"          }",
+"        }",
+"      }",
+"      if (found.length >= 8) break;",
+"    }",
+"",
+"    // biggest drawing first, then the one with the most room to spare",
+"    found.sort(function(a,b){ return (b.S - a.S) || (b.clear - a.clear); });",
+"",
+"    var outRes = [];",
+"    for (var fi = 0; fi < Math.min(found.length, 8); fi++){",
+"      var F2 = found[fi];",
+"      var th4 = F2.rot * Math.PI / 180, cos4 = Math.cos(th4), sin4 = Math.sin(th4);",
+"      var geo = [], flags = [], len2 = 0, prev = null;",
+"      for (var r5 = 0; r5 < runsO.length; r5++){",
+"        for (var p5 = 0; p5 < runsO[r5].length; p5++){",
+"          var pm2 = place(runsO[r5][p5][0], runsO[r5][p5][1], F2.S, cos4, sin4, F2.cx, F2.cy);",
+"          if (prev) len2 += Math.hypot(pm2[0]-prev[0], pm2[1]-prev[1]);",
+"          geo.push(pm2);",
+"          flags.push(p5 === 0 && r5 > 0);      // the hop between separate strokes",
+"          prev = pm2;",
+"        }",
+"      }",
+"      var Pp = G.P;",
+"      function toLL2(pt){ return [Pp.lat0 + pt[1] / Pp.mPerLat, Pp.lon0 + pt[0] / Pp.mPerLon]; }",
+"      var namer = G.polys[F2.owner];",
+"      outRes.push({",
+"        openGround: true,",
+"        place: namer ? (namer.name || namer.kind) : 'open ground',",
+"        score: 0, coverage: 0, fidelity: 0, p90: 0,",
+"        spanMeters: F2.S * radiusUnits * 2,",
+"        strayFraction: 0, lengthRatio: 1, detail: 999, spacing: 0,",
+"        inRange: len2 >= optsO.minMeters && len2 <= optsO.maxMeters,",
+"        lengthMeters: len2, connectorMeters: 0, failedSegments: 0,",
+"        clearance: Math.round(F2.clear),",
+"        rotation: ((F2.rot % 360) + 540) % 360 - 180,",
+"        widthMeters: F2.S,",
+"        center: toLL2([F2.cx, F2.cy]),",
+"        geometry: geo.map(toLL2),",
+"        connectorFlags: flags,",
+"        anchors: geo.map(toLL2),",
+"        anchorIndices: null",
+"      });",
+"    }",
+"    post({ type:'results', results: outRes, ms: Date.now() - t1, shapeLen: shapeLenO,",
+"           openGround: true });",
 "    return;",
 "  }",
 "",
@@ -878,6 +1095,79 @@
     };
   }
 
+  /* Open ground you can actually run across. Cemeteries are deliberately absent;
+     golf courses are included but usually private, which is why every result
+     names the place it found so you can judge it. */
+  var OPEN_LEISURE = "park|pitch|golf_course|recreation_ground|common|garden|sports_centre|track|dog_park";
+  var OPEN_LANDUSE = "grass|recreation_ground|meadow|village_green|greenfield";
+
+  function openSpaceQuery(tile) {
+    var bb = tile.south.toFixed(5) + "," + tile.west.toFixed(5) + "," +
+             tile.north.toFixed(5) + "," + tile.east.toFixed(5);
+    return "[out:json][timeout:120];(" +
+      "way[\"leisure\"~\"^(" + OPEN_LEISURE + ")$\"](" + bb + ");" +
+      "way[\"landuse\"~\"^(" + OPEN_LANDUSE + ")$\"](" + bb + ");" +
+      ");out geom qt;";
+  }
+
+  function fetchOpenSpace(bounds, onNote, minAreaM2) {
+    var tiles = splitBounds(bounds, 60);
+    var polys = [];
+    var i = 0;
+
+    function absorb(json) {
+      var els = (json && json.elements) || [];
+      for (var k = 0; k < els.length; k++) {
+        var el = els[k];
+        if (!el.geometry || el.geometry.length < 4) continue;
+        var pts = el.geometry.map(function (g) { return [g.lat, g.lon]; });
+        var t = el.tags || {};
+        polys.push({
+          id: el.id,
+          name: t.name || "",
+          kind: t.leisure || t.landuse || "open ground",
+          pts: pts
+        });
+      }
+    }
+
+    function next() {
+      if (i >= tiles.length) {
+        var seenIds = {};
+        var out = polys.filter(function (p2) {
+          if (seenIds[p2.id]) return false;
+          seenIds[p2.id] = 1;
+          return polygonAreaM2(p2.pts) >= (minAreaM2 || 0);
+        });
+        out.sort(function (a, b) { return polygonAreaM2(b.pts) - polygonAreaM2(a.pts); });
+        return Promise.resolve(out);
+      }
+      var t = tiles[i++];
+      rotate = i - 1;
+      var label = tiles.length > 1 ? "Area " + i + " of " + tiles.length + " — " : "";
+      var body = "data=" + encodeURIComponent(openSpaceQuery(t));
+      return fetchTile(body, onNote, label).then(function (json) {
+        absorb(json);
+        return next();
+      });
+    }
+    return pickEndpoint(bounds, onNote).then(next);
+  }
+
+  function polygonAreaM2(pts) {
+    if (pts.length < 3) return 0;
+    var lat0 = 0, i;
+    for (i = 0; i < pts.length; i++) lat0 += pts[i][0];
+    lat0 /= pts.length;
+    var mx = 111320 * Math.cos(lat0 * Math.PI / 180), my = 110574;
+    var s2 = 0;
+    for (i = 0; i < pts.length; i++) {
+      var a = pts[i], b = pts[(i + 1) % pts.length];
+      s2 += (a[1] * mx) * (b[0] * my) - (b[1] * mx) * (a[0] * my);
+    }
+    return Math.abs(s2) / 2;
+  }
+
   function parseNetwork(osm) {
     var els = osm.elements || [];
     var lat = [], lon = [], byId = new Map();
@@ -975,6 +1265,36 @@
     });
   };
 
+  Matcher.prototype.loadPolys = function (polys, lat0, lon0, onProgress) {
+    var self_ = this;
+    var w = this._spawn();
+    this.ready = false;
+    return new Promise(function (resolve, reject) {
+      w.onmessage = function (ev) {
+        var m = ev.data;
+        if (m.type === "progress" && onProgress) onProgress(m);
+        if (m.type === "polysReady") { self_.ready = true; self_.info = m; resolve(m); }
+        if (m.type === "error") reject(new Error(m.message));
+      };
+      w.onerror = function (e) { reject(new Error(e.message || "worker failed")); };
+      w.postMessage({ cmd: "setPolys", lat0: lat0, lon0: lon0, polys: polys });
+    });
+  };
+
+  Matcher.prototype.searchOpen = function (runs, opts, onProgress) {
+    var w = this.worker;
+    if (!w || !this.ready) return Promise.reject(new Error("Load the open ground first."));
+    return new Promise(function (resolve, reject) {
+      w.onmessage = function (ev) {
+        var m = ev.data;
+        if (m.type === "progress" && onProgress) onProgress(m);
+        if (m.type === "results") resolve(m);
+        if (m.type === "error") reject(new Error(m.message));
+      };
+      w.postMessage({ cmd: "searchOpen", runs: runs, opts: opts });
+    });
+  };
+
   Matcher.prototype.search = function (runs, opts, onProgress) {
     var w = this.worker;
     if (!w || !this.ready) return Promise.reject(new Error("Load a road network first."));
@@ -993,6 +1313,8 @@
     __workerSrc: WORKER_SRC,
     create: function () { return new Matcher(); },
     fetchNetwork: fetchNetwork,
+    fetchOpenSpace: fetchOpenSpace,
+    polygonAreaM2: polygonAreaM2,
     graphFor: graphFor,
     areaKm2: areaKm2,
     tileCount: function (b, cats) { return splitBounds(b, tileSizeFor(cats)).length; },
