@@ -45,9 +45,30 @@ triangles.
      much of the drawing it covers, and how much detour it racks up.
 5. **Export** — GPX track, ready for a watch.
 
-The dashed purple rectangle on the map is the area that's been downloaded and is
-being searched. Panning inside it costs nothing; panning well outside triggers a
-fresh download. The last few areas are kept, so going back and forth is free.
+### The search area
+
+The dashed purple box is what gets searched, and it's set explicitly rather than
+tracking the map — so panning around, or previewing a result (which re-centres the
+map), never quietly changes what's being searched.
+
+**This view · − · + · Max.** Max snaps to the largest area that can actually be
+downloaded, about 160 km². Bigger is genuinely better: it doesn't make the logo
+larger, but it gives the search far more places the shape can land, and the best
+placement is usually somewhere you weren't looking. Widening from one screen to
+160 km² took a test route from 14% off-shape to 8%.
+
+Two things make large areas practical:
+
+- **Requests are sized to Overpass's real limits.** One 84 km² query measured
+  16.6 MB in 6 seconds — the constraint is query *slots* (a couple per minute),
+  not payload, so the tool makes few large requests rather than many small ones.
+  Max is 2 requests, not 12.
+- **Above ~30 km² only the surfaces you picked are downloaded.** Way tags cost
+  ~40% extra and only exist to make the surface toggles free; that's a good trade
+  on a small area and a bad one across a whole valley. The tool says when it has
+  done this, because changing the mix then means re-downloading.
+
+The last few downloaded areas are cached, so going back and forth is free.
 
 ### Reading the results
 

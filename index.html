@@ -187,7 +187,16 @@
         <input type="text" id="search" placeholder="City, address, park…" autocomplete="off">
         <button id="searchBtn">Go</button>
       </div>
-      <p class="hint" style="margin-top:6px">Pan and zoom to the area you want searched.</p>
+      <label class="between"><span>Search area</span><span class="val" id="areaVal">—</span></label>
+      <div class="presets" id="areaBtns">
+        <button data-area="view">This view</button>
+        <button data-area="shrink" title="Smaller" style="flex:0 0 34px">&minus;</button>
+        <button data-area="grow" title="Bigger" style="flex:0 0 34px">+</button>
+        <button data-area="max">Max</button>
+      </div>
+      <p class="hint" id="areaHint" style="margin-top:6px">
+        The dashed box is what gets searched.
+      </p>
 
       <label>Distance</label>
       <div class="row range">
@@ -353,7 +362,8 @@
     name: "Route Art",
     segs: {},
     surfaces: ["residential", "footpaths", "trails", "cycleways", "service"],
-    distMin: 5, distMax: 10, distUnit: "mi"
+    distMin: 5, distMax: 10, distUnit: "mi",
+    area: null            // {south,west,north,east}; null follows the map view
   };
 
   /* ---------------------------------------------------------------- map */
@@ -1201,12 +1211,18 @@
     if (!b || !b.dataset.preset) return;
     state.surfaces = Matcher.PRESETS[b.dataset.preset].slice();
     renderSurfaces();
+    refreshArea();
     save();
   });
 
   /* ---- network: fetched once for the area, filtered locally per mix ---- */
 
   function describeNetwork(raw) {
+    if (raw.fixedCats) {
+      return raw.ways.length.toLocaleString() + " ways downloaded for " +
+             raw.fixedCats.length + " surface type" + (raw.fixedCats.length === 1 ? "" : "s") +
+             " — large areas skip the rest, so changing the mix re-downloads.";
+    }
     var parts = [];
     Matcher.CATEGORIES.forEach(function (c, i) {
       if (raw.counts[i]) parts.push(c.label.toLowerCase() + " " + raw.counts[i].toLocaleString());
@@ -1214,19 +1230,70 @@
     return raw.ways.length.toLocaleString() + " ways downloaded (" + parts.join(", ") + ").";
   }
 
-  /* Fraction of the current view already covered by a downloaded area. Previewing
-     a result re-centres the map, so requiring full containment would re-download
-     the streets constantly — and Overpass rate-limits hard. */
-  function overlapWithView(bounds) {
-    var v = map.getBounds();
-    var s = Math.max(v.getSouth(), bounds.getSouth());
-    var n = Math.min(v.getNorth(), bounds.getNorth());
-    var w = Math.max(v.getWest(), bounds.getWest());
-    var e = Math.min(v.getEast(), bounds.getEast());
-    if (n <= s || e <= w) return 0;
-    var area = (v.getNorth() - v.getSouth()) * (v.getEast() - v.getWest());
-    return area > 0 ? ((n - s) * (e - w)) / area : 0;
+  /* The search box is chosen explicitly and then stays put, so panning the map —
+     or previewing a result, which re-centres it — never quietly changes what's
+     being searched, and never triggers a surprise re-download. */
+  function areaBounds() {
+    if (state.area) {
+      return L.latLngBounds([state.area.south, state.area.west],
+                            [state.area.north, state.area.east]);
+    }
+    return map.getBounds().pad(0.1);
   }
+
+  function setArea(b) {
+    state.area = { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
+    refreshArea();
+    save();
+  }
+
+  function scaleBounds(b, f) {
+    var c = b.getCenter();
+    var dLat = (b.getNorth() - b.getSouth()) / 2 * f;
+    var dLon = (b.getEast() - b.getWest()) / 2 * f;
+    return L.latLngBounds([c.lat - dLat, c.lng - dLon], [c.lat + dLat, c.lng + dLon]);
+  }
+
+  /* Grow about the centre until it reaches the largest area we can actually pull down. */
+  function maxBounds(around) {
+    var b = around, guard = 0;
+    while (Matcher.areaKm2(b) < Matcher.MAX_KM2 && guard++ < 80) b = scaleBounds(b, 1.1);
+    while (Matcher.areaKm2(b) > Matcher.MAX_KM2 && guard++ < 160) b = scaleBounds(b, 0.98);
+    return b;
+  }
+
+  function refreshArea() {
+    var b = areaBounds();
+    var km2 = Matcher.areaKm2(b);
+    var narrowed = km2 > Matcher.NARROW_ABOVE_KM2;
+    var tiles = Matcher.tileCount(b, narrowed ? state.surfaces : null);
+    var mb = km2 * (narrowed ? 0.2 : 0.35);
+    $("areaVal").textContent = Math.round(km2) + " km²";
+    $("areaHint").innerHTML = "The dashed box is what gets searched" +
+      (state.area ? "" : ", and right now it follows the map view") + ". Roughly " +
+      Math.round(mb) + " MB over " + tiles + " request" + (tiles === 1 ? "" : "s") +
+      (narrowed ? ", limited to the surfaces you picked" : "") +
+      (tiles > 1 ? ". Overpass rate-limits, so a busy moment can add a wait." : ".");
+    showNetArea(b);
+  }
+
+  $("areaBtns").addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (!btn || !btn.dataset.area) return;
+    if (btn.dataset.area === "view") {
+      setArea(map.getBounds().pad(0.1));
+      return;
+    }
+    var next;
+    if (btn.dataset.area === "max") next = maxBounds(areaBounds());
+    else if (btn.dataset.area === "shrink") next = scaleBounds(areaBounds(), 1 / 1.4);
+    else next = scaleBounds(areaBounds(), 1.4);
+    if (Matcher.areaKm2(next) > Matcher.MAX_KM2) next = maxBounds(areaBounds());
+    setArea(next);
+    map.fitBounds(next, { padding: [20, 20] });
+  });
+
+  map.on("moveend zoomend", function () { if (!state.area) refreshArea(); });
 
   var netCache = [];          // recently downloaded areas, newest last
   var netRect = null;         // shows which area is being searched
@@ -1247,31 +1314,39 @@
     $("netStats").textContent = describeNetwork(raw);
   }
 
+  function catsMatch(raw) {
+    if (!raw || !raw.fixedCats) return true;      // tagged payload, filter locally
+    return raw.fixedCats.join(",") === state.surfaces.slice().sort().join(",");
+  }
+
   function ensureNetwork(force) {
+    var b = areaBounds();
+    var key = b.toBBoxString();
     if (!force) {
-      var best = null;
+      var hit = null;
       netCache.forEach(function (entry) {
-        var o = overlapWithView(entry.bounds);
-        if (o >= 0.6 && (!best || o > best.o)) best = { o: o, entry: entry };
+        if (entry.key === key && catsMatch(entry.raw)) hit = entry;
       });
-      if (best) { useNetwork(best.entry.raw, best.entry.bounds); return Promise.resolve(); }
+      if (hit) { useNetwork(hit.raw, hit.bounds); return Promise.resolve(); }
     }
-    var b = map.getBounds().pad(0.2);
-    var d = bboxKm(b);
-    if (d.w * d.h > 200) {
-      return Promise.reject(new Error("This view covers " + d.w.toFixed(1) + " × " + d.h.toFixed(1) +
-        " km, which is more than OpenStreetMap will hand over at once. Zoom in a little."));
+    var km2 = Matcher.areaKm2(b);
+    if (km2 > Matcher.MAX_KM2 * 1.05) {
+      return Promise.reject(new Error("That box is " + Math.round(km2) +
+        " km², past what OpenStreetMap will serve. Press Max to snap it to the limit."));
     }
-    return Matcher.fetchNetwork(b, setProgress).then(function (raw) {
-      if (!raw.nodeCount || !raw.ways.length) throw new Error("No streets found in this area.");
-      netCache.push({ raw: raw, bounds: b });
-      if (netCache.length > 4) netCache.shift();
+    // Way tags are what make the surface toggles free, but they cost ~40% more
+    // payload — not worth hauling across a large region.
+    var cats = km2 > Matcher.NARROW_ABOVE_KM2 ? state.surfaces.slice() : null;
+    return Matcher.fetchNetwork(b, setProgress, cats).then(function (raw) {
+      if (!raw.nodeCount || !raw.ways.length) throw new Error("No streets found in that box.");
+      netCache.push({ raw: raw, bounds: b, key: key });
+      if (netCache.length > 3) netCache.shift();
       useNetwork(raw, b);
     });
   }
 
   function ensureGraph() {
-    if (graphKey === surfaceKey()) return Promise.resolve();
+    if (graphKey === surfaceKey() && catsMatch(rawNetwork)) return Promise.resolve();
     if (!state.surfaces.length) throw new Error("Pick at least one surface to run on.");
     setProgress("Indexing " + state.surfaces.length + " surface type" +
                 (state.surfaces.length === 1 ? "" : "s") + "…");

@@ -604,14 +604,68 @@
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+  /* --------------------------------------------------------- area maths */
+
+  function areaKm2(b) {
+    var latMid = (b.getSouth() + b.getNorth()) / 2;
+    var w = (b.getEast() - b.getWest()) * 111.32 * Math.cos(latMid * Math.PI / 180);
+    var h = (b.getNorth() - b.getSouth()) * 110.574;
+    return Math.abs(w * h);
+  }
+
+  /* Overpass copes with far more per request than it has spare slots per minute,
+     so the win is fewer, larger requests. One 84 km² untagged query measured
+     16.6 MB in 6 seconds; the same area split into tiles spent minutes queueing.
+     Tagged queries carry ~3x the bytes per km², so they get smaller tiles. */
+  var TILE_KM2_TAGGED = 35;
+  var TILE_KM2_NARROW = 85;
+  var MAX_KM2 = 160;
+
+  function tileSizeFor(cats) { return (cats && cats.length) ? TILE_KM2_NARROW : TILE_KM2_TAGGED; }
+
+  /* One Overpass request can't return a large region, so cut it into tiles that
+     each come back comfortably and stitch the results together. */
+  function splitBounds(b, maxKm2) {
+    var latMid = (b.getSouth() + b.getNorth()) / 2;
+    var wKm = (b.getEast() - b.getWest()) * 111.32 * Math.cos(latMid * Math.PI / 180);
+    var hKm = (b.getNorth() - b.getSouth()) * 110.574;
+    var need = Math.max(1, Math.ceil((wKm * hKm) / maxKm2));
+    var nx = Math.max(1, Math.round(Math.sqrt(need * (wKm / Math.max(0.001, hKm)))));
+    var ny = Math.max(1, Math.ceil(need / nx));
+    var dLat = (b.getNorth() - b.getSouth()) / ny;
+    var dLon = (b.getEast() - b.getWest()) / nx;
+    var out = [];
+    for (var iy = 0; iy < ny; iy++) {
+      for (var ix = 0; ix < nx; ix++) {
+        out.push({
+          south: b.getSouth() + iy * dLat, north: b.getSouth() + (iy + 1) * dLat,
+          west: b.getWest() + ix * dLon,  east: b.getWest() + (ix + 1) * dLon
+        });
+      }
+    }
+    return out;
+  }
+
   /* The public Overpass servers shed load with 429/504 all the time. Retry with
      backoff, then fall through to the mirrors before giving up. */
-  function fetchNetwork(bounds, onNote) {
-    var s = bounds.getSouth().toFixed(5), w = bounds.getWest().toFixed(5),
-        n = bounds.getNorth().toFixed(5), e = bounds.getEast().toFixed(5);
-    var q = "[out:json][timeout:90];way[\"highway\"~\"^(" + UNION_RE + ")$\"][\"area\"!~\"yes\"]" +
-            "(" + s + "," + w + "," + n + "," + e + ");out body qt;>;out skel qt;";
-    var body = "data=" + encodeURIComponent(q);
+  /* Only the selected surfaces, when the caller asks for it. Way tags cost ~40%
+     extra, which is worth paying on a small area to make the surface toggles free,
+     but not worth it when hauling down a large region. */
+  function queryFor(tile, cats) {
+    var re = UNION_RE, tags = "out body qt;>;out skel qt;";
+    if (cats && cats.length) {
+      var list = [];
+      CATEGORIES.forEach(function (c) {
+        if (cats.indexOf(c.key) >= 0) list = list.concat(c.tags);
+      });
+      if (list.length) { re = list.join("|"); tags = "(._;>;);out skel qt;"; }
+    }
+    return "[out:json][timeout:120];way[\"highway\"~\"^(" + re + ")$\"][\"area\"!~\"yes\"]" +
+           "(" + tile.south.toFixed(5) + "," + tile.west.toFixed(5) + "," +
+           tile.north.toFixed(5) + "," + tile.east.toFixed(5) + ");" + tags;
+  }
+
+  function fetchTile(body, onNote, label) {
 
     // Overpass allots a couple of query slots per client and answers 504 once
     // they're spent, so hammering it just burns the next slot too. Back off hard.
@@ -628,14 +682,14 @@
     function attempt(i) {
       if (i >= attempts.length) {
         throw new Error(lastErr + " — every Overpass mirror is busy or rate-limiting. " +
-                        "Wait a minute and try again, or shrink the view.");
+                        "Wait a minute and try again, or shrink the search area.");
       }
       var a = attempts[i];
       var host = a.url.split("/")[2];
       if (onNote) {
-        onNote(a.wait > 2000
-          ? "Servers are busy — waiting " + Math.round(a.wait / 1000) + "s before retrying " + host + "…"
-          : "Asking " + host + (i ? " (attempt " + (i + 1) + ")" : "") + "…");
+        onNote(label + (a.wait > 2000
+          ? "servers busy, waiting " + Math.round(a.wait / 1000) + "s…"
+          : "asking " + host + (i ? " (try " + (i + 1) + ")" : "") + "…"));
       }
       return sleep(a.wait)
         .then(function () {
@@ -649,7 +703,6 @@
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.json();
         })
-        .then(function (j) { return parseNetwork(j); })
         .catch(function (err) {
           lastErr = err.message;
           return attempt(i + 1);
@@ -658,8 +711,73 @@
     return Promise.resolve().then(function () { return attempt(0); });
   }
 
+  function fetchNetwork(bounds, onNote, cats) {
+    var tiles = splitBounds(bounds, tileSizeFor(cats));
+    var acc = newAccumulator();
+    var i = 0;
+
+    function next() {
+      if (i >= tiles.length) return Promise.resolve(finishAccumulator(acc, cats));
+      var t = tiles[i++];
+      var label = tiles.length > 1 ? "Area " + i + " of " + tiles.length + " — " : "";
+      var body = "data=" + encodeURIComponent(queryFor(t, cats));
+      return fetchTile(body, onNote, label).then(function (json) {
+        accumulate(acc, json);
+        return next();
+      });
+    }
+    return next();
+  }
+
   /* Parse the Overpass payload once into node coords plus ways tagged by
      category. Selecting a different surface mix is then a local re-index. */
+  function newAccumulator() {
+    return { lat: [], lon: [], byId: new Map(), ways: [], wayIds: new Set(),
+             counts: new Array(CATEGORIES.length).fill(0) };
+  }
+
+  /* Tiles overlap at their shared edges and repeat the ways that straddle them,
+     so both nodes and ways are keyed on their OSM id. */
+  function accumulate(acc, osm) {
+    var els = osm.elements || [];
+    var i, el;
+    for (i = 0; i < els.length; i++) {
+      el = els[i];
+      if (el.type !== "node" || acc.byId.has(el.id)) continue;
+      acc.byId.set(el.id, acc.lat.length);
+      acc.lat.push(el.lat); acc.lon.push(el.lon);
+    }
+    for (i = 0; i < els.length; i++) {
+      el = els[i];
+      if (el.type !== "way" || !el.nodes || acc.wayIds.has(el.id)) continue;
+      var cat;
+      if (el.tags && el.tags.highway !== undefined) {
+        cat = TAG_TO_CAT[el.tags.highway];
+      } else {
+        cat = 0;                       // skel responses carry no tags to sort by
+      }
+      if (cat === undefined) continue;
+      var refs = [];
+      for (var k = 0; k < el.nodes.length; k++) {
+        var ix = acc.byId.get(el.nodes[k]);
+        if (ix !== undefined) refs.push(ix);
+      }
+      if (refs.length < 2) continue;
+      acc.wayIds.add(el.id);
+      acc.ways.push({ cat: cat, n: refs });
+      acc.counts[cat]++;
+    }
+  }
+
+  function finishAccumulator(acc, cats) {
+    return {
+      lat: Float64Array.from(acc.lat), lon: Float64Array.from(acc.lon),
+      ways: acc.ways, counts: acc.counts, nodeCount: acc.lat.length,
+      // when the fetch was narrowed, the payload has no tags and can't be re-filtered
+      fixedCats: cats && cats.length ? cats.slice().sort() : null
+    };
+  }
+
   function parseNetwork(osm) {
     var els = osm.elements || [];
     var lat = [], lon = [], byId = new Map();
@@ -695,9 +813,13 @@
      surfaces and re-indexing so no orphan nodes survive to be snapped to. */
   function graphFor(raw, selectedKeys) {
     var allow = new Array(CATEGORIES.length).fill(false);
-    selectedKeys.forEach(function (key) {
-      CATEGORIES.forEach(function (c, i) { if (c.key === key) allow[i] = true; });
-    });
+    if (raw.fixedCats) {
+      allow.fill(true);            // payload already contains only what was asked for
+    } else {
+      selectedKeys.forEach(function (key) {
+        CATEGORIES.forEach(function (c, i) { if (c.key === key) allow[i] = true; });
+      });
+    }
 
     var remap = new Int32Array(raw.nodeCount).fill(-1);
     var lat = [], lon = [], ea = [], eb = [];
@@ -772,6 +894,10 @@
     create: function () { return new Matcher(); },
     fetchNetwork: fetchNetwork,
     graphFor: graphFor,
+    areaKm2: areaKm2,
+    tileCount: function (b, cats) { return splitBounds(b, tileSizeFor(cats)).length; },
+    MAX_KM2: MAX_KM2,
+    NARROW_ABOVE_KM2: 30,
     endpoints: ENDPOINTS,
     CATEGORIES: CATEGORIES,
     PRESETS: PRESETS
