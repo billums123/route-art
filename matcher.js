@@ -645,7 +645,7 @@
       var pending = ENDPOINTS.length, settled = false;
       function lose() { if (--pending === 0 && !settled) { settled = true; resolve(null); } }
       ENDPOINTS.forEach(function (url) {
-        postOverpass(url, body, 20000).then(function (j) {
+        postOverpass(url, body, 12000).then(function (j) {
           if (settled) return;
           if (j && j.elements && j.elements.length) { settled = true; chosenEndpoint = url; resolve(url); }
           else lose();
@@ -669,8 +669,11 @@
      so the win is fewer, larger requests. One 84 km² untagged query measured
      16.6 MB in 6 seconds; the same area split into tiles spent minutes queueing.
      Tagged queries carry ~3x the bytes per km², so they get smaller tiles. */
-  var TILE_KM2_TAGGED = 35;
-  var TILE_KM2_NARROW = 85;
+  /* Big single requests are efficient against a healthy server and a bad bet
+     against a loaded one — a ~17 MB ask is where the free mirrors start timing
+     out. Keep each request modest enough to land first time. */
+  var TILE_KM2_TAGGED = 30;
+  var TILE_KM2_NARROW = 40;
   var MAX_KM2 = 160;
 
   function tileSizeFor(cats) { return (cats && cats.length) ? TILE_KM2_NARROW : TILE_KM2_TAGGED; }
@@ -717,17 +720,26 @@
            tile.north.toFixed(5) + "," + tile.east.toFixed(5) + ");" + tags;
   }
 
+  var rotate = 0;
+
   function fetchTile(body, onNote, label) {
 
     // Overpass allots a couple of query slots per client and answers 504 once
     // they're spent, so hammering one server just burns its next slot. Lead with
     // whichever instance answered the probe, then try the others, then wait.
-    var lead = chosenEndpoint || ENDPOINTS[0];
-    var rest = ENDPOINTS.filter(function (u) { return u !== lead; });
-    var attempts = [{ url: lead, wait: 0 }];
-    rest.forEach(function (u) { attempts.push({ url: u, wait: 800 }); });
-    attempts.push({ url: lead, wait: 15000 });
-    attempts.push({ url: lead, wait: 40000 });
+    var ordered = ENDPOINTS.slice();
+    if (chosenEndpoint) {
+      ordered = [chosenEndpoint].concat(ordered.filter(function (u) { return u !== chosenEndpoint; }));
+    }
+    // Rotate which server leads each tile: slots are per client per server, so
+    // sending every tile to the same one is the fastest way to get throttled.
+    var lead = rotate % ordered.length;
+    var attempts = [];
+    for (var k = 0; k < ordered.length; k++) {
+      attempts.push({ url: ordered[(lead + k) % ordered.length], wait: k ? 800 : 0 });
+    }
+    attempts.push({ url: ordered[lead], wait: 15000 });
+    attempts.push({ url: ordered[(lead + 1) % ordered.length], wait: 30000 });
 
     var lastErr = "unknown error";
 
@@ -765,6 +777,7 @@
     function next() {
       if (i >= tiles.length) return Promise.resolve(finishAccumulator(acc, cats));
       var t = tiles[i++];
+      rotate = i - 1;
       var label = tiles.length > 1 ? "Area " + i + " of " + tiles.length + " — " : "";
       var body = "data=" + encodeURIComponent(queryFor(t, cats));
       return fetchTile(body, onNote, label).then(function (json) {
