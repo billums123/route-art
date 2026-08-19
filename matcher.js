@@ -596,11 +596,63 @@
   });
   var UNION_RE = CATEGORIES.reduce(function (acc, c) { return acc.concat(c.tags); }, []).join("|");
 
+  /* Full-planet Overpass instances only. Region-limited mirrors (overpass.osm.ch,
+     for one) answer 200 with an empty result outside their coverage, which looks
+     exactly like "there are no streets here" — worse than an outright failure. */
   var ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter"
   ];
+
+  var chosenEndpoint = null;      // a server known to be answering, this session
+
+  function postOverpass(url, body, timeoutMs) {
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, timeoutMs);
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body,
+      signal: ctl ? ctl.signal : undefined
+    }).then(function (r) {
+      clearTimeout(timer);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }, function (err) {
+      clearTimeout(timer);
+      throw new Error(err && err.name === "AbortError" ? "timed out" : (err.message || "network error"));
+    });
+  }
+
+  /* Ask every instance for a couple of ways near the middle of the search box and
+     take the first that actually answers with data. One rate-limited or wedged
+     server then costs nothing instead of stalling the whole download — and a
+     mirror that lacks this part of the world is ruled out at the same time. */
+  function pickEndpoint(bounds, onNote) {
+    if (chosenEndpoint) return Promise.resolve(chosenEndpoint);
+    var lat = (bounds.getSouth() + bounds.getNorth()) / 2;
+    var lon = (bounds.getWest() + bounds.getEast()) / 2;
+    var d = 0.02;
+    var q = "[out:json][timeout:20];way[\"highway\"](" +
+            (lat - d).toFixed(4) + "," + (lon - d).toFixed(4) + "," +
+            (lat + d).toFixed(4) + "," + (lon + d).toFixed(4) + ");out ids qt 3;";
+    var body = "data=" + encodeURIComponent(q);
+    if (onNote) onNote("Finding a server that's answering…");
+
+    return new Promise(function (resolve) {
+      var pending = ENDPOINTS.length, settled = false;
+      function lose() { if (--pending === 0 && !settled) { settled = true; resolve(null); } }
+      ENDPOINTS.forEach(function (url) {
+        postOverpass(url, body, 20000).then(function (j) {
+          if (settled) return;
+          if (j && j.elements && j.elements.length) { settled = true; chosenEndpoint = url; resolve(url); }
+          else lose();
+        }, lose);
+      });
+    });
+  }
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -668,15 +720,14 @@
   function fetchTile(body, onNote, label) {
 
     // Overpass allots a couple of query slots per client and answers 504 once
-    // they're spent, so hammering it just burns the next slot too. Back off hard,
-    // and exhaust the dependable host before the mirrors, which are often down.
-    var attempts = [
-      { url: ENDPOINTS[0], wait: 0 },
-      { url: ENDPOINTS[0], wait: 12000 },
-      { url: ENDPOINTS[0], wait: 30000 },
-      { url: ENDPOINTS[1], wait: 1000 },
-      { url: ENDPOINTS[2], wait: 1000 }
-    ];
+    // they're spent, so hammering one server just burns its next slot. Lead with
+    // whichever instance answered the probe, then try the others, then wait.
+    var lead = chosenEndpoint || ENDPOINTS[0];
+    var rest = ENDPOINTS.filter(function (u) { return u !== lead; });
+    var attempts = [{ url: lead, wait: 0 }];
+    rest.forEach(function (u) { attempts.push({ url: u, wait: 800 }); });
+    attempts.push({ url: lead, wait: 15000 });
+    attempts.push({ url: lead, wait: 40000 });
 
     var lastErr = "unknown error";
 
@@ -693,26 +744,10 @@
           : "asking " + host + (i ? " (try " + (i + 1) + ")" : "") + "…"));
       }
       return sleep(a.wait)
-        .then(function () {
-          // A wedged mirror will otherwise hang the whole chain forever.
-          var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
-          var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 60000);
-          return fetch(a.url, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: body,
-            signal: ctl ? ctl.signal : undefined
-          }).then(function (r) {
-            clearTimeout(timer);
-            return r;
-          }, function (err) {
-            clearTimeout(timer);
-            throw new Error(err && err.name === "AbortError" ? "timed out" : (err.message || "network error"));
-          });
-        })
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.json();
+        .then(function () { return postOverpass(a.url, body, 90000); })
+        .then(function (j) {
+          chosenEndpoint = a.url;          // remember what worked
+          return j;
         })
         .catch(function (err) {
           lastErr = err.message;
@@ -737,7 +772,7 @@
         return next();
       });
     }
-    return next();
+    return pickEndpoint(bounds, onNote).then(next);
   }
 
   /* Parse the Overpass payload once into node coords plus ways tagged by
@@ -910,6 +945,7 @@
     MAX_KM2: MAX_KM2,
     NARROW_ABOVE_KM2: 30,
     endpoints: ENDPOINTS,
+    resetEndpoint: function () { chosenEndpoint = null; },
     CATEGORIES: CATEGORIES,
     PRESETS: PRESETS
   };

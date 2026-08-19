@@ -161,10 +161,15 @@ console.
 
 ## Notes
 
-- Overpass is a free shared service and sheds load with 504s; the fetch retries
-  with a patient backoff and falls back to mirrors. If it keeps failing, wait a
-  minute — hammering it just burns the next slot. All surface types come down in
-  one query precisely so this happens as rarely as possible.
+- Overpass is free shared infrastructure with a couple of query slots per client,
+  and it answers 504 — or stops answering entirely — once they're spent. Before
+  the first download the tool asks every known instance for a couple of ways near
+  your search box and uses the first that replies with data, so a rate-limited or
+  wedged server costs nothing rather than stalling everything. All surface types
+  come down in one query for the same reason.
+- Only full-planet instances are in that list. Region-limited mirrors such as
+  `overpass.osm.ch` answer 200 with an empty result outside their coverage, which
+  is indistinguishable from "there are no streets here" — worse than failing.
 - Routing for manually drawn points uses [BRouter](https://brouter.de).
   Auto-matched routes are routed locally against the downloaded graph, so
   applying a match doesn't re-request anything.
