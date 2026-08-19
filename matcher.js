@@ -599,11 +599,14 @@
   /* Full-planet Overpass instances only. Region-limited mirrors (overpass.osm.ch,
      for one) answer 200 with an empty result outside their coverage, which looks
      exactly like "there are no streets here" — worse than an outright failure. */
+  /* Full-planet instances that answer a browser. Two deliberate exclusions:
+     overpass.osm.ch is Switzerland-only and returns 200 with an empty result
+     elsewhere, which reads as "no streets here"; kumi.systems and private.coffee
+     serve their error pages WITHOUT CORS headers, so from a browser they can
+     only ever fail — and each attempt costs a red console error and a wait. */
   var ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter"
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
   ];
 
   var chosenEndpoint = null;      // a server known to be answering, this session
@@ -672,11 +675,36 @@
   /* Big single requests are efficient against a healthy server and a bad bet
      against a loaded one — a ~17 MB ask is where the free mirrors start timing
      out. Keep each request modest enough to land first time. */
-  var TILE_KM2_TAGGED = 30;
-  var TILE_KM2_NARROW = 40;
+  /* Sized so the first attempt lands even on the slower mirror, whose gateway
+     gives up around 30s of work: measured there, 20 km² narrow returns 4.3 MB in
+     3s while 40 km² times out. The main instance is far quicker; anything that
+     does fail gets halved and retried. */
+  var TILE_KM2_TAGGED = 20;
+  var TILE_KM2_NARROW = 30;
   var MAX_KM2 = 160;
 
   function tileSizeFor(cats) { return (cats && cats.length) ? TILE_KM2_NARROW : TILE_KM2_TAGGED; }
+
+  function rectKm2(t) {
+    var latMid = (t.south + t.north) / 2;
+    return Math.abs((t.east - t.west) * 111.32 * Math.cos(latMid * Math.PI / 180) *
+                    (t.north - t.south) * 110.574);
+  }
+
+  /* Halve a tile along its longer side. */
+  function halveTile(t) {
+    var latMid = (t.south + t.north) / 2;
+    var wKm = (t.east - t.west) * 111.32 * Math.cos(latMid * Math.PI / 180);
+    var hKm = (t.north - t.south) * 110.574;
+    if (wKm >= hKm) {
+      var midLon = (t.west + t.east) / 2;
+      return [{ south: t.south, north: t.north, west: t.west, east: midLon },
+              { south: t.south, north: t.north, west: midLon, east: t.east }];
+    }
+    var midLat = (t.south + t.north) / 2;
+    return [{ south: t.south, north: midLat, west: t.west, east: t.east },
+            { south: midLat, north: t.north, west: t.west, east: t.east }];
+  }
 
   /* One Overpass request can't return a large region, so cut it into tiles that
      each come back comfortably and stitch the results together. */
@@ -774,16 +802,29 @@
     var acc = newAccumulator();
     var i = 0;
 
+    /* Servers differ in how much they'll chew through before their gateway gives
+       up — the main instance answers 84 km² in seconds where a mirror times out.
+       Rather than guess a size that suits the slowest, ask for a sensible one and
+       halve anything that fails, which tunes itself to whoever is answering. */
+    function runTile(t, label, depth) {
+      var body = "data=" + encodeURIComponent(queryFor(t, cats));
+      return fetchTile(body, onNote, label).then(function (json) {
+        accumulate(acc, json);
+      }, function (err) {
+        if (depth >= 3 || rectKm2(t) < 5) throw err;
+        var halves = halveTile(t);
+        if (onNote) onNote(label + "too big for the server — splitting it…");
+        return runTile(halves[0], label, depth + 1)
+          .then(function () { return runTile(halves[1], label, depth + 1); });
+      });
+    }
+
     function next() {
       if (i >= tiles.length) return Promise.resolve(finishAccumulator(acc, cats));
       var t = tiles[i++];
       rotate = i - 1;
       var label = tiles.length > 1 ? "Area " + i + " of " + tiles.length + " — " : "";
-      var body = "data=" + encodeURIComponent(queryFor(t, cats));
-      return fetchTile(body, onNote, label).then(function (json) {
-        accumulate(acc, json);
-        return next();
-      });
+      return runTile(t, label, 0).then(next);
     }
     return pickEndpoint(bounds, onNote).then(next);
   }
