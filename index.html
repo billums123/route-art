@@ -79,6 +79,47 @@
     box-shadow:0 1px 4px #0009;cursor:grab;
   }
   .pt-dot.first{border-color:var(--ok)}
+  h2 .step{
+    display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
+    border-radius:50%;background:var(--accent);color:#fff;font-size:10px;font-weight:700;margin-right:7px;
+  }
+  .sec h2{display:flex;align-items:center}
+  details{margin-top:9px;border:1px solid var(--line);border-radius:9px;background:#1c1e29;overflow:hidden}
+  details+details{margin-top:6px}
+  summary{
+    cursor:pointer;padding:7px 10px;font-size:11.5px;color:var(--ink-dim);list-style:none;
+    display:flex;align-items:center;gap:6px;user-select:none;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"›";font-size:15px;line-height:1;transition:transform .15s;display:inline-block;opacity:.75}
+  details[open]>summary::before{transform:rotate(90deg)}
+  summary:hover{color:var(--ink)}
+  details .inner{padding:2px 10px 11px}
+  details .inner label:first-child{margin-top:2px}
+  #skelPreview{
+    width:100%;height:132px;background:#0e0f16;border:1px solid var(--line);
+    border-radius:9px;display:block;margin-top:10px;
+  }
+  .presets{display:flex;gap:5px;margin-bottom:7px}
+  .presets button{flex:1;padding:5px 4px;font-size:11px;text-align:center}
+  .presets button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{
+    display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:20px;
+    border:1px solid var(--line);background:var(--panel-2);font-size:11.5px;cursor:pointer;color:var(--ink-dim);
+    margin:0;
+  }
+  .chip input{display:none}
+  .chip:hover{color:var(--ink)}
+  .chip.on{background:#2b2550;border-color:var(--accent);color:var(--ink)}
+  .chip .dot{width:6px;height:6px;border-radius:50%;background:var(--line)}
+  .chip.on .dot{background:var(--accent)}
+  .range{align-items:center}
+  .range input{text-align:center;flex:1 1 0;min-width:0}
+  .range select{flex:0 0 68px;width:68px;padding-right:4px}
+  .range .to{color:var(--ink-dim);font-size:11px;flex:0 0 auto}
+  button.big{padding:9px;font-size:13px}
+  .stat b.wide{font-size:15px}
   .res{
     background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:8px 9px;margin-bottom:6px;cursor:pointer;
   }
@@ -102,173 +143,182 @@
 <div id="app">
   <aside id="panel">
     <h1>Route Art Studio</h1>
-    <p class="sub">Trace a logo over the map, snap it to real roads, export a GPX.</p>
+    <p class="sub">Turn a logo into a route you can actually run.</p>
 
     <div class="sec">
-      <h2>1 · Find your area</h2>
+      <h2><span class="step">1</span>Your logo</h2>
+      <div class="drop" id="drop">
+        <b>Drop an image</b> or <u>browse</u><br>
+        <span style="opacity:.7">PNG, SVG or JPG — bold, simple shapes work best</span>
+      </div>
+      <input type="file" id="file" accept="image/*" hidden>
+      <canvas id="skelPreview" width="584" height="264"></canvas>
+      <p class="hint" id="skelStats" style="margin-top:6px">Your logo's centerline shows up here.</p>
+
+      <details>
+        <summary>Fine-tune the tracing</summary>
+        <div class="inner">
+          <label class="between"><span>Ink threshold</span><span class="val" id="thrVal">0.50</span></label>
+          <input type="range" id="thr" min="5" max="95" value="50">
+
+          <label class="chk"><input type="checkbox" id="skelInvert"> Light artwork on a dark background</label>
+
+          <label class="between"><span>Smoothing</span><span class="val" id="simpVal">1.6 px</span></label>
+          <input type="range" id="simp" min="2" max="60" value="16">
+
+          <label class="between"><span>Prune corner spurs</span><span class="val" id="pruneVal">14 px</span></label>
+          <input type="range" id="prune" min="0" max="60" value="14">
+
+          <label class="between"><span>Drop specks under</span><span class="val" id="minStrokeVal">12 px</span></label>
+          <input type="range" id="minStroke" min="0" max="80" value="12">
+
+          <label class="chk"><input type="checkbox" id="showSkel" checked> Show centerline on the map</label>
+        </div>
+      </details>
+    </div>
+
+    <div class="sec">
+      <h2><span class="step">2</span>Where &amp; how far</h2>
       <div class="row">
         <input type="text" id="search" placeholder="City, address, park…" autocomplete="off">
         <button id="searchBtn">Go</button>
       </div>
-    </div>
+      <p class="hint" style="margin-top:6px">Pan and zoom to the area you want searched.</p>
 
-    <div class="sec">
-      <h2>2 · Logo overlay</h2>
-      <div class="drop" id="drop">
-        Drop an image here or <u>browse</u><br>
-        <span style="opacity:.7">PNG with transparency works best</span>
-      </div>
-      <input type="file" id="file" accept="image/*" hidden>
-
-      <label class="between"><span>Opacity</span><span class="val" id="opacityVal">55%</span></label>
-      <input type="range" id="opacity" min="0" max="100" value="55">
-
-      <label class="between"><span>Size (width on the ground)</span><span class="val" id="sizeVal">1.0 km</span></label>
-      <input type="range" id="size" min="0" max="1000" value="500">
-
-      <label class="between"><span>Rotation</span><span class="val" id="rotVal">0°</span></label>
-      <input type="range" id="rot" min="-180" max="180" step="0.5" value="0">
-
-      <label>Blend mode</label>
-      <select id="blend">
-        <option value="normal">Normal</option>
-        <option value="multiply">Multiply (dark lines)</option>
-        <option value="screen">Screen (light lines)</option>
-        <option value="difference">Difference (high contrast)</option>
-      </select>
-
-      <label class="chk"><input type="checkbox" id="invert"> Invert colors</label>
-      <label class="chk"><input type="checkbox" id="punch"> Punch up contrast</label>
-
-      <div class="row" style="margin-top:9px">
-        <button id="fitOverlay" style="flex:1">Fit to view</button>
-        <button id="zoomOverlay" style="flex:1">Zoom to logo</button>
-      </div>
-      <button id="clearImg" class="wide danger" style="margin-top:6px">Remove image</button>
-    </div>
-
-    <div class="sec">
-      <h2>3 · Centerline</h2>
-      <canvas id="skelPreview" width="584" height="300"
-              style="width:100%;height:150px;background:#0e0f16;border:1px solid var(--line);border-radius:9px;display:block"></canvas>
-      <p class="hint" id="skelStats" style="margin-top:6px">Load an image to trace its centerline.</p>
-
-      <label class="between"><span>Ink threshold</span><span class="val" id="thrVal">0.50</span></label>
-      <input type="range" id="thr" min="5" max="95" value="50">
-
-      <label class="chk"><input type="checkbox" id="skelInvert"> Light artwork on a dark background</label>
-
-      <label class="between"><span>Smoothing</span><span class="val" id="simpVal">1.6 px</span></label>
-      <input type="range" id="simp" min="2" max="60" value="16">
-
-      <label class="between"><span>Drop specks under</span><span class="val" id="minStrokeVal">12 px</span></label>
-      <input type="range" id="minStroke" min="0" max="80" value="12">
-
-      <label class="between"><span>Prune corner spurs</span><span class="val" id="pruneVal">14 px</span></label>
-      <input type="range" id="prune" min="0" max="60" value="14">
-
-      <label class="chk"><input type="checkbox" id="showSkel" checked> Show centerline on the map</label>
-    </div>
-
-    <div class="sec">
-      <h2>4 · Auto-match to roads</h2>
-      <p class="hint">Frame the area you want to search, load its streets, then let it hunt for placements.</p>
-
-      <label>Network</label>
-      <select id="netKind">
-        <option value="foot">Walkable — roads, paths, trails</option>
-        <option value="quiet">Quiet — residential + paths</option>
-        <option value="road">Roads only</option>
-      </select>
-      <button id="loadNet" class="wide" style="margin-top:8px">Load streets for this view</button>
-      <p class="hint" id="netStats" style="margin-top:6px"></p>
-
-      <label>Target run distance</label>
-      <div class="row">
-        <input type="number" id="matchDist" value="10" step="0.5" min="0.5">
-        <select id="matchUnit" style="width:86px"><option value="km">km</option><option value="mi">mi</option></select>
+      <label>Distance</label>
+      <div class="row range">
+        <input type="number" id="distMin" value="8" step="0.5" min="0.2">
+        <span class="to">to</span>
+        <input type="number" id="distMax" value="12" step="0.5" min="0.2">
+        <select id="distUnit">
+          <option value="km">km</option>
+          <option value="mi">mi</option>
+        </select>
       </div>
 
-      <label>Rotation</label>
-      <select id="rotMode">
-        <option value="none">Keep the logo upright</option>
-        <option value="small">Allow ± 20°</option>
-        <option value="full">Any angle</option>
-      </select>
+      <label>Run on</label>
+      <div class="presets" id="presets">
+        <button data-preset="walkable">Walkable</button>
+        <button data-preset="roads">Roads</button>
+        <button data-preset="quiet">Quiet</button>
+        <button data-preset="all">Everything</button>
+      </div>
+      <div class="chips" id="surfaces"></div>
 
-      <label class="between"><span>Search effort</span><span class="val" id="detailVal">Balanced</span></label>
-      <input type="range" id="detail" min="0" max="2" value="1">
+      <details>
+        <summary>Search options</summary>
+        <div class="inner">
+          <label>Rotation</label>
+          <select id="rotMode">
+            <option value="none">Keep the logo upright</option>
+            <option value="small">Allow ± 20°</option>
+            <option value="full">Any angle</option>
+          </select>
 
-      <button id="runMatch" class="primary wide" style="margin-top:9px">Find matching routes</button>
+          <label class="between"><span>Search effort</span><span class="val" id="detailVal">Balanced</span></label>
+          <input type="range" id="detail" min="0" max="2" value="1">
+
+          <button id="reloadNet" class="wide" style="margin-top:9px">Re-download streets</button>
+          <p class="hint" id="netStats" style="margin-top:6px"></p>
+        </div>
+      </details>
+
+      <button id="runMatch" class="primary wide big" style="margin-top:10px">Find routes</button>
       <div class="hint" id="matchProgress" style="margin-top:7px"></div>
       <div id="matchResults" style="margin-top:8px"></div>
     </div>
 
     <div class="sec">
-      <h2>5 · Draw &amp; edit route</h2>
-      <div class="modes">
-        <button id="modeAdjust" aria-pressed="true">Move logo</button>
-        <button id="modeDraw" aria-pressed="false">Draw route</button>
-      </div>
-      <p class="hint" id="modeHint">Drag the map to move the logo. <kbd>shift</kbd>+drag rotates, <kbd>alt</kbd>+drag resizes.</p>
-
-      <label class="chk"><input type="checkbox" id="snap" checked> Snap to real roads &amp; paths</label>
-      <label>Routing style</label>
-      <select id="profile">
-        <option value="trekking">Trekking — roads + paths (default)</option>
-        <option value="hiking-beta">Hiking — favours trails</option>
-        <option value="shortest">Shortest — most direct</option>
-        <option value="fastbike">Bike — roads, avoids stairs</option>
-      </select>
-
-      <label class="chk"><input type="checkbox" id="closed"> Close the loop (return to start)</label>
-
-      <div class="row" style="margin-top:9px">
-        <button id="undo" style="flex:1">Undo point</button>
-        <button id="clearRoute" class="danger" style="flex:1">Clear route</button>
-      </div>
-    </div>
-
-    <div class="sec">
-      <h2>6 · Distance</h2>
+      <h2><span class="step">3</span>Your route</h2>
       <div class="stats">
-        <div class="stat"><span>Total</span><b id="distKm">0.00 km</b></div>
+        <div class="stat"><span>Distance</span><b id="distKm">0.00 km</b></div>
         <div class="stat"><span>Miles</span><b id="distMi">0.00 mi</b></div>
         <div class="stat"><span>Points</span><b id="ptCount">0</b></div>
       </div>
-      <label>Target distance (optional)</label>
-      <div class="row">
-        <input type="number" id="target" placeholder="e.g. 10" step="0.1" min="0">
-        <select id="targetUnit" style="width:90px">
-          <option value="km">km</option>
-          <option value="mi">mi</option>
-        </select>
-      </div>
-      <p class="hint" id="targetOut" style="margin-top:6px"></p>
+      <p class="hint" id="targetOut" style="margin-top:7px"></p>
+
+      <details>
+        <summary>Edit by hand</summary>
+        <div class="inner">
+          <label>Mouse does</label>
+          <div class="modes">
+            <button id="modePan" aria-pressed="true">Pan map</button>
+            <button id="modeAdjust" aria-pressed="false">Move logo</button>
+            <button id="modeDraw" aria-pressed="false">Draw</button>
+          </div>
+          <p class="hint" id="modeHint">The map pans and zooms normally.</p>
+
+          <label class="chk"><input type="checkbox" id="snap" checked> Snap new points to roads &amp; paths</label>
+          <label>Routing style</label>
+          <select id="profile">
+            <option value="trekking">Trekking — roads + paths</option>
+            <option value="hiking-beta">Hiking — favours trails</option>
+            <option value="shortest">Shortest — most direct</option>
+            <option value="fastbike">Bike — roads, avoids stairs</option>
+          </select>
+
+          <label class="chk"><input type="checkbox" id="closed"> Close the loop</label>
+
+          <div class="row" style="margin-top:9px">
+            <button id="undo" style="flex:1">Undo point</button>
+            <button id="clearRoute" class="danger" style="flex:1">Clear route</button>
+          </div>
+          <p class="hint" style="margin-top:8px">
+            <kbd>M</kbd> cycle mouse mode · <kbd>[</kbd> <kbd>]</kbd> rotate logo ·
+            <kbd>-</kbd> <kbd>=</kbd> resize · arrows nudge · <kbd>U</kbd> undo ·
+            right-click a point to delete it
+          </p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Logo overlay</summary>
+        <div class="inner">
+          <label class="between"><span>Opacity</span><span class="val" id="opacityVal">55%</span></label>
+          <input type="range" id="opacity" min="0" max="100" value="55">
+
+          <label class="between"><span>Size on the ground</span><span class="val" id="sizeVal">1.0 km</span></label>
+          <input type="range" id="size" min="0" max="1000" value="500">
+
+          <label class="between"><span>Rotation</span><span class="val" id="rotVal">0°</span></label>
+          <input type="range" id="rot" min="-180" max="180" step="0.5" value="0">
+
+          <label>Blend mode</label>
+          <select id="blend">
+            <option value="normal">Normal</option>
+            <option value="multiply">Multiply (dark lines)</option>
+            <option value="screen">Screen (light lines)</option>
+            <option value="difference">Difference (high contrast)</option>
+          </select>
+
+          <label class="chk"><input type="checkbox" id="invert"> Invert colors</label>
+          <label class="chk"><input type="checkbox" id="punch"> Punch up contrast</label>
+
+          <div class="row" style="margin-top:9px">
+            <button id="fitOverlay" style="flex:1">Fit to view</button>
+            <button id="zoomOverlay" style="flex:1">Zoom to logo</button>
+          </div>
+          <button id="clearImg" class="wide danger" style="margin-top:6px">Remove image</button>
+        </div>
+      </details>
     </div>
 
     <div class="sec">
-      <h2>7 · Export</h2>
+      <h2><span class="step">4</span>Export</h2>
       <label>Route name</label>
-      <input type="text" id="routeName" value="Route Art" >
-      <button id="gpx" class="primary wide" style="margin-top:9px">Download GPX</button>
+      <input type="text" id="routeName" value="Route Art">
+      <button id="gpx" class="primary wide big" style="margin-top:9px">Download GPX</button>
       <div class="row" style="margin-top:6px">
         <button id="geojson" style="flex:1">GeoJSON</button>
         <button id="reset" class="danger" style="flex:1">Reset all</button>
       </div>
       <p class="hint" style="margin-top:10px">
-        Load the GPX into your watch app as a route/course (COROS → Route Library, Garmin → Courses),
-        then run it with navigation on. The activity syncs to Strava the way it always does.
+        Import the GPX as a route in your watch app (COROS → Route Library,
+        Garmin → Courses), then run it with navigation on. It syncs to Strava
+        the way any run does.
       </p>
     </div>
 
-    <div class="sec">
-      <h2>Shortcuts</h2>
-      <p class="hint">
-        <kbd>M</kbd> swap move/draw · <kbd>[</kbd> <kbd>]</kbd> rotate · <kbd>-</kbd> <kbd>=</kbd> resize ·
-        arrows nudge · <kbd>U</kbd> undo point · hold <kbd>shift</kbd> for bigger steps
-      </p>
-    </div>
   </aside>
 
   <main id="map"></main>
@@ -293,11 +343,13 @@
     center: { lat: 40.7608, lng: -111.891 },
     widthM: 1000, rotation: 0, opacity: 0.55,
     blend: "normal", invert: false, punch: false,
-    mode: "adjust",
+    mode: "pan",
     points: [], closed: false, snap: true, profile: "trekking",
     view: { lat: 40.7608, lng: -111.891, zoom: 14 },
     name: "Route Art",
-    segs: {}
+    segs: {},
+    surfaces: ["residential", "footpaths", "trails", "cycleways", "service"],
+    distMin: 8, distMax: 12, distUnit: "km"
   };
 
   /* ---------------------------------------------------------------- map */
@@ -533,17 +585,28 @@
     $("distMi").textContent = mi.toFixed(2) + " mi";
     $("ptCount").textContent = String(state.points.length);
 
-    var t = parseFloat($("target").value);
-    if (!isNaN(t) && t > 0) {
-      var have = $("targetUnit").value === "mi" ? mi : km;
-      var d = have - t, u = $("targetUnit").value;
-      var pct = t ? (have / t * 100) : 0;
-      $("targetOut").innerHTML = Math.abs(d) < 0.05
-        ? '<span style="color:var(--ok)">On target (' + pct.toFixed(0) + '%)</span>'
-        : (d < 0 ? "Add " : "Trim ") + Math.abs(d).toFixed(2) + " " + u + " (" + pct.toFixed(0) + "% of target)";
+    var r = distanceRange();
+    if (!r || !meters) { $("targetOut").textContent = ""; return; }
+    var have = r.unit === "mi" ? mi : km;
+    if (have >= r.min && have <= r.max) {
+      $("targetOut").innerHTML = '<span style="color:var(--ok)">Inside your ' +
+        r.min + "–" + r.max + " " + r.unit + " range.</span>";
+    } else if (have < r.min) {
+      $("targetOut").textContent = "Add " + (r.min - have).toFixed(2) + " " + r.unit + " to reach your range.";
     } else {
-      $("targetOut").textContent = "";
+      $("targetOut").textContent = "Trim " + (have - r.max).toFixed(2) + " " + r.unit + " to fit your range.";
     }
+  }
+
+  /* The one distance control, shared by the search and the readout. */
+  function distanceRange() {
+    var lo = parseFloat($("distMin").value), hi = parseFloat($("distMax").value);
+    var unit = $("distUnit").value;
+    if (isNaN(lo) || lo <= 0) return null;
+    if (isNaN(hi) || hi <= 0) hi = lo;
+    if (hi < lo) { var t = lo; lo = hi; hi = t; }
+    var k = unit === "mi" ? 1609.344 : 1000;
+    return { min: lo, max: hi, unit: unit, minMeters: lo * k, maxMeters: hi * k };
   }
 
   /* ------------------------------------------------------ map interaction */
@@ -607,14 +670,24 @@
     save();
   });
 
+  var MODE_TEXT = {
+    pan:    { chip: null,
+              hint: "The map pans and zooms normally." },
+    adjust: { chip: "Move logo — drag the map",
+              hint: 'Dragging moves the logo. <kbd>shift</kbd>+drag rotates, <kbd>alt</kbd>+drag resizes.' },
+    draw:   { chip: "Draw route — click to add points",
+              hint: "Click to drop points. Drag one to move it, right-click to delete it." }
+  };
+
   function setMode(m) {
     state.mode = m;
+    $("modePan").setAttribute("aria-pressed", m === "pan");
     $("modeAdjust").setAttribute("aria-pressed", m === "adjust");
     $("modeDraw").setAttribute("aria-pressed", m === "draw");
-    $("cursorMode").textContent = m === "adjust" ? "Move logo" : "Draw route — click to add points";
-    $("modeHint").innerHTML = m === "adjust"
-      ? 'Drag the map to move the logo. <kbd>shift</kbd>+drag rotates, <kbd>alt</kbd>+drag resizes.'
-      : 'Click to drop route points. Drag a point to move it, right-click a point to delete it.';
+    var t = MODE_TEXT[m] || MODE_TEXT.pan;
+    $("cursorMode").style.display = t.chip ? "" : "none";
+    if (t.chip) $("cursorMode").textContent = t.chip;
+    $("modeHint").innerHTML = t.hint;
     map.getContainer().style.cursor = m === "draw" ? "crosshair" : "";
     save();
   }
@@ -857,6 +930,7 @@
     drawOverlay(); updateSkeleton(); save();
   });
 
+  $("modePan").addEventListener("click", function () { setMode("pan"); });
   $("modeAdjust").addEventListener("click", function () { setMode("adjust"); });
   $("modeDraw").addEventListener("click", function () { setMode("draw"); });
 
@@ -867,8 +941,14 @@
   $("undo").addEventListener("click", function () { state.points.pop(); renderRoute(); save(); });
   $("clearRoute").addEventListener("click", function () { state.points = []; renderRoute(); save(); });
 
-  $("target").addEventListener("input", function () { paint(); save(); });
-  $("targetUnit").addEventListener("change", function () { paint(); save(); });
+  ["distMin", "distMax", "distUnit"].forEach(function (id) {
+    $(id).addEventListener("input", function () {
+      state.distMin = parseFloat($("distMin").value);
+      state.distMax = parseFloat($("distMax").value);
+      state.distUnit = $("distUnit").value;
+      paint(); save();
+    });
+  });
   $("routeName").addEventListener("input", function () { state.name = $("routeName").value; save(); });
 
   $("gpx").addEventListener("click", exportGpx);
@@ -884,9 +964,13 @@
     if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
     var big = e.shiftKey, k = e.key;
 
-    if (k === "m" || k === "M") { setMode(state.mode === "adjust" ? "draw" : "adjust"); return; }
+    if (k === "m" || k === "M") {
+      var order = ["pan", "adjust", "draw"];
+      setMode(order[(order.indexOf(state.mode) + 1) % 3]);
+      return;
+    }
     if (k === "u" || k === "U") { state.points.pop(); renderRoute(); save(); return; }
-    if (k === "Escape") { setMode("adjust"); return; }
+    if (k === "Escape") { setMode("pan"); return; }
 
     if (!state.img) return;
     var step = big ? 5 : 1, handled = true;
@@ -1018,9 +1102,16 @@
   /* ---------------------------------------------------------- auto-match */
 
   var matcher = Matcher.create();
-  var netLoaded = false;
+  var rawNetwork = null;     // the parsed Overpass payload, all surfaces
+  var netBounds = null;      // the area that payload covers
+  var graphKey = null;       // surface mix the worker's graph was built from
   var results = [];
+  var busy = false;
   var previewLayer = L.layerGroup().addTo(map);
+
+  function setProgress(html) { $("matchProgress").innerHTML = html; }
+
+  function surfaceKey() { return state.surfaces.slice().sort().join(","); }
 
   function bboxKm(b) {
     return {
@@ -1029,41 +1120,149 @@
     };
   }
 
-  $("loadNet").addEventListener("click", function () {
-    var b = map.getBounds(), d = bboxKm(b);
-    if (d.w * d.h > 160) {
-      toast("That view covers " + d.w.toFixed(1) + " × " + d.h.toFixed(1) + " km — zoom in a bit (under ~160 km²).");
-      return;
-    }
-    $("loadNet").disabled = true;
-    $("netStats").textContent = "Downloading streets from OpenStreetMap…";
-    Matcher.fetchNetwork(b, $("netKind").value, function (note) { $("netStats").textContent = note; })
-      .then(function (g) {
-        if (!g.lat.length) throw new Error("no streets found in this view");
-        var c = map.getCenter();
-        $("netStats").textContent = "Building search index…";
-        return matcher.loadGraph(g, c.lat, c.lng, function (m) {
-          $("netStats").textContent = m.stage + "…";
-        }).then(function (info) {
-          netLoaded = true;
-          $("netStats").innerHTML = "<span style=\"color:#6ee7a8\">Ready</span> — " +
-            info.nodes.toLocaleString() + " junctions, " + info.edges.toLocaleString() +
-            " segments, " + Math.round(info.cell) + " m grid over " +
-            (info.spanX / 1000).toFixed(1) + " × " + (info.spanY / 1000).toFixed(1) + " km.";
-        });
-      })
-      .catch(function (err) {
-        $("netStats").innerHTML = "<span style=\"color:#ff7d97\">Failed: " + err.message + "</span>";
-      })
-      .then(function () { $("loadNet").disabled = false; });
+  /* ---- surface chips ---- */
+
+  function renderSurfaces() {
+    var host = $("surfaces");
+    host.innerHTML = "";
+    Matcher.CATEGORIES.forEach(function (c) {
+      var on = state.surfaces.indexOf(c.key) >= 0;
+      var el = document.createElement("label");
+      el.className = "chip" + (on ? " on" : "");
+      el.title = c.hint;
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = on;
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      var txt = document.createElement("span");
+      txt.textContent = c.label;
+      el.appendChild(dot); el.appendChild(box); el.appendChild(txt);
+      box.addEventListener("change", function () {
+        if (box.checked) {
+          if (state.surfaces.indexOf(c.key) < 0) state.surfaces.push(c.key);
+        } else {
+          state.surfaces = state.surfaces.filter(function (k) { return k !== c.key; });
+        }
+        el.classList.toggle("on", box.checked);
+        syncPresets();
+        save();
+      });
+      host.appendChild(el);
+    });
+    syncPresets();
+  }
+
+  function syncPresets() {
+    var key = surfaceKey();
+    Array.prototype.forEach.call($("presets").children, function (b) {
+      var preset = Matcher.PRESETS[b.dataset.preset];
+      b.setAttribute("aria-pressed", preset.slice().sort().join(",") === key);
+    });
+  }
+
+  $("presets").addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b || !b.dataset.preset) return;
+    state.surfaces = Matcher.PRESETS[b.dataset.preset].slice();
+    renderSurfaces();
+    save();
   });
+
+  /* ---- network: fetched once for the area, filtered locally per mix ---- */
+
+  function describeNetwork(raw) {
+    var parts = [];
+    Matcher.CATEGORIES.forEach(function (c, i) {
+      if (raw.counts[i]) parts.push(c.label.toLowerCase() + " " + raw.counts[i].toLocaleString());
+    });
+    return raw.ways.length.toLocaleString() + " ways downloaded (" + parts.join(", ") + ").";
+  }
+
+  /* Fraction of the current view already covered by a downloaded area. Previewing
+     a result re-centres the map, so requiring full containment would re-download
+     the streets constantly — and Overpass rate-limits hard. */
+  function overlapWithView(bounds) {
+    var v = map.getBounds();
+    var s = Math.max(v.getSouth(), bounds.getSouth());
+    var n = Math.min(v.getNorth(), bounds.getNorth());
+    var w = Math.max(v.getWest(), bounds.getWest());
+    var e = Math.min(v.getEast(), bounds.getEast());
+    if (n <= s || e <= w) return 0;
+    var area = (v.getNorth() - v.getSouth()) * (v.getEast() - v.getWest());
+    return area > 0 ? ((n - s) * (e - w)) / area : 0;
+  }
+
+  var netCache = [];          // recently downloaded areas, newest last
+  var netRect = null;         // shows which area is being searched
+
+  function showNetArea(b) {
+    if (netRect) { map.removeLayer(netRect); netRect = null; }
+    if (!b) return;
+    netRect = L.rectangle(b, {
+      color: "#7c5cff", weight: 1, dashArray: "6,6", fill: false, interactive: false
+    }).addTo(map);
+  }
+
+  function useNetwork(raw, bounds) {
+    if (rawNetwork !== raw) graphKey = null;   // graph must be rebuilt
+    rawNetwork = raw;
+    netBounds = bounds;
+    showNetArea(bounds);
+    $("netStats").textContent = describeNetwork(raw);
+  }
+
+  function ensureNetwork(force) {
+    if (!force) {
+      var best = null;
+      netCache.forEach(function (entry) {
+        var o = overlapWithView(entry.bounds);
+        if (o >= 0.6 && (!best || o > best.o)) best = { o: o, entry: entry };
+      });
+      if (best) { useNetwork(best.entry.raw, best.entry.bounds); return Promise.resolve(); }
+    }
+    var b = map.getBounds().pad(0.2);
+    var d = bboxKm(b);
+    if (d.w * d.h > 200) {
+      return Promise.reject(new Error("This view covers " + d.w.toFixed(1) + " × " + d.h.toFixed(1) +
+        " km, which is more than OpenStreetMap will hand over at once. Zoom in a little."));
+    }
+    return Matcher.fetchNetwork(b, setProgress).then(function (raw) {
+      if (!raw.nodeCount || !raw.ways.length) throw new Error("No streets found in this area.");
+      netCache.push({ raw: raw, bounds: b });
+      if (netCache.length > 4) netCache.shift();
+      useNetwork(raw, b);
+    });
+  }
+
+  function ensureGraph() {
+    if (graphKey === surfaceKey()) return Promise.resolve();
+    if (!state.surfaces.length) throw new Error("Pick at least one surface to run on.");
+    setProgress("Indexing " + state.surfaces.length + " surface type" +
+                (state.surfaces.length === 1 ? "" : "s") + "…");
+    var g = Matcher.graphFor(rawNetwork, state.surfaces);
+    if (g.lat.length < 4) {
+      throw new Error("Almost nothing here matches those surfaces — try adding more.");
+    }
+    var c = map.getCenter();
+    return matcher.loadGraph(g, c.lat, c.lng, function (m) { setProgress(m.stage + "…"); })
+      .then(function (info) {
+        graphKey = surfaceKey();
+        $("netStats").textContent = describeNetwork(rawNetwork) + " Routing over " +
+          info.nodes.toLocaleString() + " junctions.";
+      });
+  }
+
+  /* ---- search ---- */
 
   var DETAIL = [
     { label: "Fast",     gridStep: 130, scaleSteps: 3, samples: 100, refine: 8 },
     { label: "Balanced", gridStep: 85,  scaleSteps: 4, samples: 140, refine: 12 },
     { label: "Thorough", gridStep: 55,  scaleSteps: 6, samples: 190, refine: 18 }
   ];
-  $("detail").addEventListener("input", function (e) { $("detailVal").textContent = DETAIL[+e.target.value].label; });
+  $("detail").addEventListener("input", function (e) {
+    $("detailVal").textContent = DETAIL[+e.target.value].label;
+  });
 
   function rotationList() {
     var mode = $("rotMode").value, out = [], i;
@@ -1073,43 +1272,70 @@
     return out;
   }
 
-  $("runMatch").addEventListener("click", function () {
-    if (!skel || !skel.strokes.length) { toast("Load a logo and get a centerline first."); return; }
-    if (!netLoaded) { toast("Load the streets for this view first."); return; }
-
-    var runs = shapeRuns();
+  function runSearch(range) {
     var d = DETAIL[+$("detail").value];
-    var target = parseFloat($("matchDist").value) || 10;
-    var targetMeters = target * ($("matchUnit").value === "mi" ? 1609.344 : 1000);
-
-    $("runMatch").disabled = true;
-    previewLayer.clearLayers();
-    $("matchResults").innerHTML = "";
-    $("matchProgress").textContent = "Starting…";
-
-    matcher.search(runs, {
-      targetMeters: targetMeters,
+    return matcher.search(shapeRuns(), {
+      minMeters: range.minMeters,
+      maxMeters: range.maxMeters,
       rotations: rotationList(),
-      gridStep: d.gridStep,
-      scaleMin: 0.78, scaleMax: 1.3, scaleSteps: d.scaleSteps,
+      gridStep: d.gridStep, scaleSteps: d.scaleSteps,
       samples: d.samples, refine: d.refine,
       anchors: 34, maxSnap: 220
     }, function (m) {
-      $("matchProgress").textContent = m.stage + " — " + Math.round(m.pct * 100) + "%";
+      setProgress(m.stage + " — " + Math.round(m.pct * 100) + "%");
     }).then(function (out) {
       results = out.results;
-      $("matchProgress").textContent = results.length
-        ? "Found " + results.length + " candidate" + (results.length === 1 ? "" : "s") + " in " + (out.ms / 1000).toFixed(1) + "s."
-        : "No usable placement found. " + (out.diag
-            ? "(" + out.diag.candidates + " candidates from a " + out.diag.grid + " grid, best fit " +
-              out.diag.bestCoarse + " m off-road, logo sized " + (out.diag.scaleMetres/1000).toFixed(1) + " km wide.) " : "") +
-          "Try a bigger area, a different target distance, or allowing rotation.";
+      var hits = results.filter(function (r) { return r.inRange; }).length;
+      if (!results.length) {
+        setProgress("Nothing usable here. " + (out.diag
+          ? "(" + out.diag.candidates + " candidates over a " + out.diag.grid + " grid; best fit was " +
+            out.diag.bestCoarse + " m off-road.) " : "") +
+          "Try a larger area, a wider distance range, or allowing rotation.");
+      } else if (!hits) {
+        setProgress("Nothing landed inside " + range.min + "–" + range.max + " " + range.unit +
+                    ". Closest attempts below — widen the range or the area.");
+      } else {
+        setProgress("Found " + hits + " route" + (hits === 1 ? "" : "s") + " in range, in " +
+                    (out.ms / 1000).toFixed(1) + "s.");
+      }
       renderResults();
       if (results.length) selectResult(0);
-    }).catch(function (err) {
-      $("matchProgress").innerHTML = '<span style="color:#ff7d97">' + err.message + "</span>";
-    }).then(function () { $("runMatch").disabled = false; });
+    });
+  }
+
+  $("runMatch").addEventListener("click", function () {
+    if (busy) return;
+    if (!skel || !skel.strokes.length) { toast("Drop a logo in first."); return; }
+    var range = distanceRange();
+    if (!range) { toast("Set a distance range first."); return; }
+
+    busy = true;
+    $("runMatch").disabled = true;
+    previewLayer.clearLayers();
+    $("matchResults").innerHTML = "";
+    setProgress("Checking the street network…");
+
+    Promise.resolve()
+      .then(function () { return ensureNetwork(false); })
+      .then(function () { return ensureGraph(); })
+      .then(function () { return runSearch(range); })
+      .catch(function (err) { setProgress('<span style="color:#ff7d97">' + err.message + "</span>"); })
+      .then(function () { busy = false; $("runMatch").disabled = false; });
   });
+
+  $("reloadNet").addEventListener("click", function () {
+    if (busy) return;
+    busy = true;
+    $("reloadNet").disabled = true;
+    Promise.resolve()
+      .then(function () { return ensureNetwork(true); })
+      .then(function () { return ensureGraph(); })
+      .then(function () { setProgress("Streets reloaded for this view."); })
+      .catch(function (err) { setProgress('<span style="color:#ff7d97">' + err.message + "</span>"); })
+      .then(function () { busy = false; $("reloadNet").disabled = false; });
+  });
+
+  /* ---- results ---- */
 
   function quality(r) {
     var avg = (r.coverage + r.fidelity) / 2;
@@ -1121,19 +1347,25 @@
   function renderResults() {
     var host = $("matchResults");
     host.innerHTML = "";
+    var unit = $("distUnit").value;
     results.forEach(function (r, i) {
       var q = quality(r);
+      var dist = unit === "mi" ? (r.lengthMeters / 1609.344).toFixed(2) + " mi"
+                               : (r.lengthMeters / 1000).toFixed(2) + " km";
+      var alt  = unit === "mi" ? (r.lengthMeters / 1000).toFixed(2) + " km"
+                               : (r.lengthMeters / 1609.344).toFixed(2) + " mi";
       var el = document.createElement("div");
       el.className = "res";
-      el.dataset.i = i;
-      el.innerHTML =
-        '<div class="top"><b>' + (r.lengthMeters / 1000).toFixed(2) + " km</b>" +
-        '<span class="q ' + q.cls + '">' + q.label + "</span></div>" +
-        '<div class="meta">' + (r.lengthMeters / 1609.344).toFixed(2) + " mi · off-shape " +
-        Math.round((r.coverage + r.fidelity) / 2) + " m · " + Math.round(r.rotation) + "°" +
+      var meta = alt + " · off-shape " + Math.round((r.coverage + r.fidelity) / 2) + " m" +
+        (Math.abs(r.rotation) >= 1 ? " · " + Math.round(r.rotation) + "°" : "") +
         (r.connectorMeters > 20 ? " · " + (r.connectorMeters / 1000).toFixed(1) + " km connectors" : "") +
-        "</div>" +
+        (r.inRange ? "" : " · outside your range");
+      el.innerHTML =
+        '<div class="top"><b>' + dist + "</b>" +
+        '<span class="q ' + q.cls + '">' + q.label + "</span></div>" +
+        '<div class="meta">' + meta + "</div>" +
         '<button class="use">Use this route</button>';
+      if (!r.inRange) el.style.opacity = "0.72";
       el.addEventListener("mouseenter", function () { previewResult(r); });
       el.addEventListener("click", function (ev) {
         selectResult(i);
@@ -1153,7 +1385,6 @@
   function previewResult(r) {
     previewLayer.clearLayers();
     if (!r) return;
-    // split geometry into solid (traced) and dashed (connector) runs
     var cur = [], curFlag = r.connectorFlags[0];
     function flush() {
       if (cur.length > 1) {
@@ -1202,11 +1433,11 @@
       }
     }
 
-    setMode("draw");
+    setMode("pan");
     renderRoute();
     save();
     previewLayer.clearLayers();
-    toast("Loaded as an editable route — drag any point to tidy it up.");
+    toast("Loaded. Open “Edit by hand” if you want to tweak it.");
   }
 
   /* -------------------------------------------------------------- restore */
@@ -1238,8 +1469,15 @@
     $("profile").value = state.profile;
     $("closed").checked = state.closed;
     $("routeName").value = state.name || "Route Art";
+    $("distMin").value = state.distMin;
+    $("distMax").value = state.distMax;
+    $("distUnit").value = state.distUnit;
+    if (!Array.isArray(state.surfaces) || !state.surfaces.length) {
+      state.surfaces = Matcher.PRESETS.walkable.slice();
+    }
+    renderSurfaces();
     syncSizeUI();
-    setMode(state.mode || "adjust");
+    setMode(state.mode || "pan");
     applyImageStyle();
 
     if (state.img) {

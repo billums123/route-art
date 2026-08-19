@@ -281,13 +281,17 @@
 "    var nSample = opts.samples || 140;",
 "    var coarse = resample(runs, shapeLen / nSample).map(function(s){ return s.p; });",
 "",
-"    // candidate scales from the target distance",
+"    // Candidate sizes come straight from the distance range the user asked for.",
+"    // Routing detours add length, so widen a little at both ends and filter the",
+"    // finished routes on their real measured length.",
 "    var detour = 1.22;",
-"    var S0 = opts.targetMeters / (shapeLen * detour);",
+"    var sLo = (opts.minMeters / (shapeLen * detour)) * 0.85;",
+"    var sHi = (opts.maxMeters / (shapeLen * detour)) * 1.15;",
+"    if (!(sHi > sLo)) sHi = sLo * 1.2;",
+"    var sSteps = Math.max(3, opts.scaleSteps | 0);",
 "    var scales = [];",
-"    var sMin = opts.scaleMin, sMax = opts.scaleMax, sSteps = opts.scaleSteps;",
 "    for (var si = 0; si < sSteps; si++)",
-"      scales.push(S0 * (sMin + (sMax - sMin) * (sSteps === 1 ? 0.5 : si/(sSteps-1))));",
+"      scales.push(sLo + (sHi - sLo) * (si / (sSteps - 1)));",
 "",
 "    var rots = opts.rotations;",
 "    var step = opts.gridStep;",
@@ -452,6 +456,7 @@
 "",
 "      results.push({",
 "        score: score, coverage: cov, fidelity: fid, lengthRatio: lengthRatio,",
+"        inRange: routeLen >= opts.minMeters && routeLen <= opts.maxMeters,",
 "        lengthMeters: routeLen, connectorMeters: connectorLen, failedSegments: failed,",
 "        rotation: ((C.rot % 360) + 540) % 360 - 180,",
 "        widthMeters: C.S,",
@@ -464,12 +469,16 @@
 "      post({ type:'progress', pct: 0.75 + 0.25*(k3/cands.length), stage:'Routing candidates' });",
 "    }",
 "",
-"    results.sort(function(a,b){ return a.score - b.score; });",
-"    post({ type:'results', results: results.slice(0, 6), ms: Date.now() - t0, shapeLen: shapeLen,",
+"    // routes inside the requested range first, best-fitting shape within that",
+"    results.sort(function(a,b){",
+"      if (a.inRange !== b.inRange) return a.inRange ? -1 : 1;",
+"      return a.score - b.score;",
+"    });",
+"    post({ type:'results', results: results.slice(0, 8), ms: Date.now() - t0, shapeLen: shapeLen,",
 "           diag: { candidates: cands.length, buckets: buckets.size, scales: scales.length,",
 "                   rotations: rots.length, grid: xs.length + 'x' + ys.length,",
 "                   bestCoarse: cands.length ? Math.round(cands[0].cost) : null,",
-"                   scaleMetres: Math.round(S0) } });",
+"                   sizeRange: [Math.round(sLo), Math.round(sHi)] } });",
 "    return;",
 "  }",
 "};"
@@ -483,11 +492,36 @@
 
   /* -------------------------------------------------------- OSM plumbing */
 
-  var HIGHWAY_SETS = {
-    foot: "residential|living_street|unclassified|tertiary|tertiary_link|secondary|secondary_link|service|footway|path|cycleway|pedestrian|track|steps|primary|primary_link",
-    road: "residential|living_street|unclassified|tertiary|tertiary_link|secondary|secondary_link|primary|primary_link|service",
-    quiet: "residential|living_street|unclassified|footway|path|cycleway|pedestrian|track"
+  /* Surfaces the user can mix and match. Everything is fetched in one go and
+     filtered locally, so changing the mix costs nothing and never re-queries
+     Overpass — which matters, because it rate-limits hard. */
+  var CATEGORIES = [
+    { key: "mainRoads",   label: "Main roads",  hint: "primary, secondary, tertiary",
+      tags: ["primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"] },
+    { key: "residential", label: "Residential", hint: "neighbourhood streets",
+      tags: ["residential", "living_street", "unclassified"] },
+    { key: "service",     label: "Alleys",      hint: "service roads, parking aisles",
+      tags: ["service"] },
+    { key: "footpaths",   label: "Footpaths",   hint: "sidewalks, plazas",
+      tags: ["footway", "pedestrian"] },
+    { key: "trails",      label: "Trails",      hint: "dirt paths, tracks",
+      tags: ["path", "track", "bridleway"] },
+    { key: "cycleways",   label: "Bike paths",  hint: "dedicated cycleways",
+      tags: ["cycleway"] }
+  ];
+
+  var PRESETS = {
+    walkable: ["residential", "footpaths", "trails", "cycleways", "service"],
+    roads:    ["mainRoads", "residential", "service"],
+    quiet:    ["residential", "footpaths", "cycleways"],
+    all:      CATEGORIES.map(function (c) { return c.key; })
   };
+
+  var TAG_TO_CAT = {};
+  CATEGORIES.forEach(function (c, i) {
+    c.tags.forEach(function (t) { TAG_TO_CAT[t] = i; });
+  });
+  var UNION_RE = CATEGORIES.reduce(function (acc, c) { return acc.concat(c.tags); }, []).join("|");
 
   var ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -499,12 +533,11 @@
 
   /* The public Overpass servers shed load with 429/504 all the time. Retry with
      backoff, then fall through to the mirrors before giving up. */
-  function fetchNetwork(bounds, kind, onNote) {
+  function fetchNetwork(bounds, onNote) {
     var s = bounds.getSouth().toFixed(5), w = bounds.getWest().toFixed(5),
         n = bounds.getNorth().toFixed(5), e = bounds.getEast().toFixed(5);
-    var re = HIGHWAY_SETS[kind] || HIGHWAY_SETS.foot;
-    var q = "[out:json][timeout:90];way[\"highway\"~\"^(" + re + ")$\"][\"area\"!~\"yes\"]" +
-            "(" + s + "," + w + "," + n + "," + e + ");(._;>;);out skel qt;";
+    var q = "[out:json][timeout:90];way[\"highway\"~\"^(" + UNION_RE + ")$\"][\"area\"!~\"yes\"]" +
+            "(" + s + "," + w + "," + n + "," + e + ");out body qt;>;out skel qt;";
     var body = "data=" + encodeURIComponent(q);
 
     // Overpass allots a couple of query slots per client and answers 504 once
@@ -543,7 +576,7 @@
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.json();
         })
-        .then(function (j) { return buildGraphArrays(j); })
+        .then(function (j) { return parseNetwork(j); })
         .catch(function (err) {
           lastErr = err.message;
           return attempt(i + 1);
@@ -552,31 +585,59 @@
     return Promise.resolve().then(function () { return attempt(0); });
   }
 
-  function buildGraphArrays(osm) {
+  /* Parse the Overpass payload once into node coords plus ways tagged by
+     category. Selecting a different surface mix is then a local re-index. */
+  function parseNetwork(osm) {
     var els = osm.elements || [];
-    var latById = new Map(), lonById = new Map();
+    var lat = [], lon = [], byId = new Map();
     var i, el;
     for (i = 0; i < els.length; i++) {
       el = els[i];
-      if (el.type === "node") { latById.set(el.id, el.lat); lonById.set(el.id, el.lon); }
+      if (el.type !== "node") continue;
+      byId.set(el.id, lat.length);
+      lat.push(el.lat); lon.push(el.lon);
     }
-    var index = new Map();
-    var lat = [], lon = [], ea = [], eb = [];
-    function idx(id) {
-      var v = index.get(id);
-      if (v !== undefined) return v;
-      if (!latById.has(id)) return -1;
-      v = lat.length;
-      index.set(id, v);
-      lat.push(latById.get(id)); lon.push(lonById.get(id));
-      return v;
-    }
+    var ways = [], counts = new Array(CATEGORIES.length).fill(0);
     for (i = 0; i < els.length; i++) {
       el = els[i];
-      if (el.type !== "way" || !el.nodes) continue;
-      for (var k = 1; k < el.nodes.length; k++) {
-        var a = idx(el.nodes[k - 1]), b = idx(el.nodes[k]);
-        if (a < 0 || b < 0 || a === b) continue;
+      if (el.type !== "way" || !el.nodes || !el.tags) continue;
+      var cat = TAG_TO_CAT[el.tags.highway];
+      if (cat === undefined) continue;
+      var refs = [];
+      for (var k = 0; k < el.nodes.length; k++) {
+        var ix = byId.get(el.nodes[k]);
+        if (ix !== undefined) refs.push(ix);
+      }
+      if (refs.length < 2) continue;
+      ways.push({ cat: cat, n: refs });
+      counts[cat]++;
+    }
+    return {
+      lat: Float64Array.from(lat), lon: Float64Array.from(lon),
+      ways: ways, counts: counts, nodeCount: lat.length
+    };
+  }
+
+  /* Build a routable graph from the parsed network, keeping only the selected
+     surfaces and re-indexing so no orphan nodes survive to be snapped to. */
+  function graphFor(raw, selectedKeys) {
+    var allow = new Array(CATEGORIES.length).fill(false);
+    selectedKeys.forEach(function (key) {
+      CATEGORIES.forEach(function (c, i) { if (c.key === key) allow[i] = true; });
+    });
+
+    var remap = new Int32Array(raw.nodeCount).fill(-1);
+    var lat = [], lon = [], ea = [], eb = [];
+    function idx(i) {
+      if (remap[i] < 0) { remap[i] = lat.length; lat.push(raw.lat[i]); lon.push(raw.lon[i]); }
+      return remap[i];
+    }
+    for (var w = 0; w < raw.ways.length; w++) {
+      var way = raw.ways[w];
+      if (!allow[way.cat]) continue;
+      for (var k = 1; k < way.n.length; k++) {
+        var a = idx(way.n[k - 1]), b = idx(way.n[k]);
+        if (a === b) continue;
         ea.push(a); eb.push(b);
       }
     }
@@ -637,7 +698,9 @@
     __workerSrc: WORKER_SRC,
     create: function () { return new Matcher(); },
     fetchNetwork: fetchNetwork,
+    graphFor: graphFor,
     endpoints: ENDPOINTS,
-    HIGHWAY_SETS: HIGHWAY_SETS
+    CATEGORIES: CATEGORIES,
+    PRESETS: PRESETS
   };
 })(window);
