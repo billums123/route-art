@@ -267,6 +267,7 @@
       <button id="runMatch" class="primary wide big" style="margin-top:10px">Find routes</button>
       <div class="hint" id="matchProgress" style="margin-top:7px"></div>
       <div id="matchResults" style="margin-top:8px"></div>
+      <button id="findMore" class="wide" style="margin-top:6px;display:none">Find more, somewhere else</button>
     </div>
 
     <div class="sec">
@@ -1263,6 +1264,18 @@
     $("traceHint").innerHTML = mode === "open"
       ? "Drawn exactly as-is inside a park or field — no streets, so the shape comes out clean. Routes are shorter, and it's on you to check the ground is open to the public."
       : "Snapped to roads and paths.";
+
+    /* A park route is a mile, a street route is ten. Carrying a street-sized
+       distance range into open ground finds nothing at all, which just looks
+       broken — so move the range the first time you switch. */
+    var r0 = distanceRange();
+    if (mode === "open" && r0 && r0.max > (r0.unit === "mi" ? 3 : 5)) {
+      $("distMin").value = r0.unit === "mi" ? 0.5 : 0.8;
+      $("distMax").value = r0.unit === "mi" ? 3 : 5;
+      $("distMin").dispatchEvent(new Event("input", { bubbles: true }));
+      toast("Distance set to " + $("distMin").value + "–" + $("distMax").value +
+            " " + r0.unit + " — park routes are much shorter.");
+    }
     rawNetwork = null;                 // the two modes need different data
     openPolys = null;
     graphKey = null;
@@ -1628,18 +1641,20 @@
     return out;
   }
 
-  function runSearch(range) {
+  function runSearch(range, append) {
     var d = DETAIL[+$("detail").value];
+    var exclude = append ? results.map(function (r) { return r.center; }) : null;
 
     if (isOpen()) {
       return matcher.searchOpen(shapeRuns(), {
         minMeters: range.minMeters,
         maxMeters: range.maxMeters,
         rotations: rotationList(),
-        margin: 8
+        margin: 8,
+        exclude: exclude
       }, function (m) {
         setProgress(m.stage + " — " + Math.round(m.pct * 100) + "%");
-      }).then(function (out) { return showResults(out, range); });
+      }).then(function (out) { return showResults(out, range, append); });
     }
 
     return matcher.search(shapeRuns(), {
@@ -1648,15 +1663,26 @@
       rotations: rotationList(),
       gridStep: d.gridStep, scaleSteps: d.scaleSteps,
       samples: d.samples, refine: d.refine,
-      anchors: 34, maxSnap: 220
+      anchors: 34, maxSnap: 220,
+      exclude: exclude
     }, function (m) {
       setProgress(m.stage + " — " + Math.round(m.pct * 100) + "%");
-    }).then(function (out) { return showResults(out, range); });
+    }).then(function (out) { return showResults(out, range, append); });
   }
 
-  function showResults(out, range) {
+  function showResults(out, range, append) {
     {
-      results = out.results;
+      if (append) {
+        if (!out.results.length) {
+          toast("Nothing else here — try moving the box.");
+          $("findMore").disabled = true;
+          $("findMore").textContent = "No more spots here";
+          return;
+        }
+        results = results.concat(out.results);
+      } else {
+        results = out.results;
+      }
 
       /* Order the list the way it reads: requested distance first, then the same
          quality tier the badge shows, then the finer score. Sorting on the raw
@@ -1715,7 +1741,16 @@
           fmtGround(r0.spanMeters) + " across." + sizes + "</span>";
       }
       var hits = results.filter(function (r) { return r.inRange; }).length;
-      if (!results.length) {
+      if (!results.length && out.fits) {
+        var per = $("distUnit").value === "mi" ? 1609.344 : 1000;
+        var can = out.fits.maxLengthMeters / per;
+        setProgress("Nothing fits at " + range.min + "–" + range.max + " " + range.unit + ". " +
+          (can > 0.05
+            ? "The most open spot here" + (out.fits.place ? " (" + out.fits.place + ")" : "") +
+              " takes a drawing " + fmtGround(out.fits.spanMeters) + " across — about " +
+              can.toFixed(2) + " " + range.unit + " of running. Set your maximum near that."
+            : "No space here is big enough for this shape. Move the box somewhere with a large park, or lower the minimum size."));
+      } else if (!results.length) {
         setProgress("Nothing usable here. " + (out.diag
           ? "(" + out.diag.candidates + " candidates over a " + out.diag.grid + " grid; best fit was " +
             out.diag.bestCoarse + " m off-road.) " : "") +
@@ -1729,8 +1764,24 @@
       }
       renderResults();
       if (results.length) selectResult(0);
+      $("findMore").style.display = results.length ? "" : "none";
+      $("findMore").disabled = false;
+      $("findMore").textContent = "Find more, somewhere else";
     }
   }
+
+  $("findMore").addEventListener("click", function () {
+    if (busy) { toast("Still working — one moment."); return; }
+    var range = distanceRange();
+    if (!range || !streetsReady()) return;
+    busy = true;
+    $("findMore").disabled = true;
+    $("runMatch").disabled = true;
+    Promise.resolve()
+      .then(function () { return runSearch(range, true); })
+      .catch(function (err) { setProgress('<span style="color:#ff7d97">' + err.message + "</span>"); })
+      .then(function () { busy = false; refreshActions(); });
+  });
 
   $("runMatch").addEventListener("click", function () {
     if (busy) { toast("Still downloading streets — one moment."); return; }
@@ -1748,6 +1799,7 @@
     $("runMatch").disabled = true;
     previewLayer.clearLayers();
     $("matchResults").innerHTML = "";
+    $("findMore").style.display = "none";
     setProgress("Searching…");
 
     Promise.resolve()
