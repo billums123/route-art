@@ -243,8 +243,8 @@
       </div>
 
       <div id="openOpts" style="display:none">
-        <label class="between"><span>Smallest space to consider</span><span class="val" id="minAreaVal">2 ha</span></label>
-        <input type="range" id="minArea" min="0" max="40" value="8">
+        <label class="between"><span>Smallest space to consider</span><span class="val" id="minAreaVal">5 acres</span></label>
+        <input type="range" id="minArea" min="1" max="60" step="1" value="5">
       </div>
 
       <details>
@@ -395,7 +395,7 @@
     distMin: 5, distMax: 10, distUnit: "mi",
     area: null,           // {south,west,north,east}; null follows the map view
     trace: "streets",     // "streets" | "open"
-    minAreaHa: 2
+    minAreaAcres: 5
   };
 
   /* ---------------------------------------------------------------- map */
@@ -1278,10 +1278,8 @@
   });
 
   $("minArea").addEventListener("input", function (e) {
-    state.minAreaHa = +e.target.value / 4;
-    $("minAreaVal").textContent = state.minAreaHa < 1
-      ? Math.round(state.minAreaHa * 10000) + " m²"
-      : state.minAreaHa.toFixed(state.minAreaHa < 10 ? 1 : 0) + " ha";
+    state.minAreaAcres = +e.target.value;
+    $("minAreaVal").textContent = state.minAreaAcres + (state.minAreaAcres === 1 ? " acre" : " acres");
     openPolys = null;
     refreshActions();
     save();
@@ -1291,7 +1289,7 @@
 
   function describeOpen(polys) {
     var big = polys.slice(0, 3).map(function (p2) {
-      return (p2.name || p2.kind) + " (" + (Matcher.polygonAreaM2(p2.pts) / 10000).toFixed(1) + " ha)";
+      return (p2.name || p2.kind) + " (" + Math.round(Matcher.polygonAreaM2(p2.pts) / 4046.856) + " acres)";
     });
     return polys.length.toLocaleString() + " open spaces found. Largest: " + big.join(", ") + ".";
   }
@@ -1491,7 +1489,7 @@
   function streetsReady(b) {
     var box = b || areaBounds();
     if (!netBounds || netBounds.toBBoxString() !== box.toBBoxString()) return false;
-    if (isOpen()) return !!(openPolys && openPolys.minAreaHa === state.minAreaHa);
+    if (isOpen()) return !!(openPolys && openPolys.minAcres === state.minAreaAcres);
     return !!(rawNetwork && catsMatch(rawNetwork));
   }
 
@@ -1552,12 +1550,12 @@
         " km², past what OpenStreetMap will serve. Press Max to snap it to the limit."));
     }
     if (isOpen()) {
-      var minM2 = state.minAreaHa * 10000;
+      var minM2 = state.minAreaAcres * 4046.856;
       return Matcher.fetchOpenSpace(b, say, minM2).then(function (polys) {
         if (!polys.length) {
           throw new Error("No open ground of that size in this box — shrink the minimum, or move the box.");
         }
-        openPolys = { polys: polys, minAreaHa: state.minAreaHa };
+        openPolys = { polys: polys, minAcres: state.minAreaAcres };
         rawNetwork = null;
         netBounds = b;
         graphKey = null;
@@ -1581,14 +1579,14 @@
     var say = note || setProgress;
 
     if (isOpen()) {
-      if (graphKey === "open:" + state.minAreaHa && matcher.ready) return Promise.resolve();
+      if (graphKey === "open:" + state.minAreaAcres && matcher.ready) return Promise.resolve();
       if (!openPolys) throw new Error("Download the open ground first.");
       var c2 = map.getCenter();
       return matcher.loadPolys(openPolys.polys, c2.lat, c2.lng, function (m) { say(m.stage + "…"); })
         .then(function (info) {
-          graphKey = "open:" + state.minAreaHa;
+          graphKey = "open:" + state.minAreaAcres;
           $("netStats").textContent = describeOpen(openPolys.polys) +
-            " Widest clear span " + info.widest + " m.";
+            " Widest clear span " + fmtGround(info.widest) + ".";
           refreshActions();
         });
     }
@@ -1816,7 +1814,7 @@
           '<div class="top"><b>' + dist + "</b>" +
           '<span class="q good">Exact trace</span></div>' +
           '<div class="meta">' + alt + " · in " + (r.place || "open ground") +
-          " · " + fmtGround(r.spanMeters || 0) + " across · " + r.clearance + " m clear" +
+          " · " + fmtGround(r.spanMeters || 0) + " across · " + fmtGround(r.clearance) + " clear" +
           (Math.abs(r.rotation) >= 1 ? " · " + Math.round(r.rotation) + "°" : "") +
           (r.inRange ? "" : " · outside your range") + "</div>" +
           '<button class="use">Use this route</button>';
@@ -1967,10 +1965,13 @@
     renderSurfaces();
     syncSizeUI();
     setMode(state.mode || "pan");
-    $("minArea").value = Math.round((state.minAreaHa || 2) * 4);
-    $("minAreaVal").textContent = (state.minAreaHa || 2) < 1
-      ? Math.round((state.minAreaHa || 2) * 10000) + " m²"
-      : (state.minAreaHa || 2).toFixed((state.minAreaHa || 2) < 10 ? 1 : 0) + " ha";
+    // settings saved before this used hectares
+    if (state.minAreaAcres === undefined && state.minAreaHa !== undefined) {
+      state.minAreaAcres = Math.max(1, Math.round(state.minAreaHa * 2.47105));
+    }
+    if (!state.minAreaAcres) state.minAreaAcres = 5;
+    $("minArea").value = state.minAreaAcres;
+    $("minAreaVal").textContent = state.minAreaAcres + (state.minAreaAcres === 1 ? " acre" : " acres");
     setTrace(state.trace || "streets");
     refreshArea();
     applyImageStyle();

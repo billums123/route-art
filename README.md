@@ -58,10 +58,10 @@ On *open ground* the route is the drawing. It searches parks, playing fields,
 recreation grounds and greens for somewhere the shape fits with room to spare,
 then traces it exactly — no routing, no staircase, no compromise. Every result
 names the space it found and how much clearance it has, e.g. *"in Liberty Park ·
-0.29 mi across · 120 m clear"*.
+0.29 mi across · 390 ft clear"*.
 
-The trade-off is length. A 40 ha park fits a drawing about 500 m across, which
-is a route of roughly one mile. Street routes run to ten or twenty. So: open
+The trade-off is length. A 100-acre park fits a drawing about 500 m across,
+which is a route of roughly one mile. Street routes run to ten or twenty. So: open
 ground for a clean shape, streets for distance.
 
 Two things worth knowing. Cemeteries are excluded deliberately; golf courses are
