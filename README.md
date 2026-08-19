@@ -8,6 +8,8 @@ Everything runs in the browser. No build step, no API keys, no server of your ow
 
 ## Run it
 
+Hosted at <https://billums123.github.io/route-art/>, or locally:
+
 ```sh
 ./run.sh
 ```
@@ -140,6 +142,7 @@ GPX to Strava directly — that would post a ride you didn't do.
 | `skeleton.js` | Image → binary mask → thinning → traced polylines → drawing order |
 | `matcher.js` | Overpass fetch, graph building, and the search worker |
 | `samples/` | Test artwork |
+| `vendor/leaflet/` | Leaflet, vendored so the page has no CDN dependency |
 
 `window.routeArt` exposes the map, state, and `buildGpx()` for poking from the
 console.
