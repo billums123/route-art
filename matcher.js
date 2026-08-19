@@ -507,19 +507,30 @@
             "(" + s + "," + w + "," + n + "," + e + ");(._;>;);out skel qt;";
     var body = "data=" + encodeURIComponent(q);
 
-    var attempts = [];
-    ENDPOINTS.forEach(function (url, i) {
-      var tries = (i === 0) ? 3 : 1;
-      for (var t = 0; t < tries; t++) attempts.push({ url: url, wait: t * 4000 });
-    });
+    // Overpass allots a couple of query slots per client and answers 504 once
+    // they're spent, so hammering it just burns the next slot too. Back off hard.
+    var attempts = [
+      { url: ENDPOINTS[0], wait: 0 },
+      { url: ENDPOINTS[1], wait: 1000 },
+      { url: ENDPOINTS[0], wait: 15000 },
+      { url: ENDPOINTS[2], wait: 1000 },
+      { url: ENDPOINTS[0], wait: 35000 }
+    ];
 
     var lastErr = "unknown error";
 
     function attempt(i) {
-      if (i >= attempts.length) throw new Error(lastErr + " — Overpass is busy, try again shortly.");
+      if (i >= attempts.length) {
+        throw new Error(lastErr + " — every Overpass mirror is busy or rate-limiting. " +
+                        "Wait a minute and try again, or shrink the view.");
+      }
       var a = attempts[i];
       var host = a.url.split("/")[2];
-      if (onNote) onNote("Asking " + host + (i ? " (attempt " + (i + 1) + ")" : "") + "…");
+      if (onNote) {
+        onNote(a.wait > 2000
+          ? "Servers are busy — waiting " + Math.round(a.wait / 1000) + "s before retrying " + host + "…"
+          : "Asking " + host + (i ? " (attempt " + (i + 1) + ")" : "") + "…");
+      }
       return sleep(a.wait)
         .then(function () {
           return fetch(a.url, {
