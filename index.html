@@ -82,6 +82,30 @@
     box-shadow:0 1px 4px #0009;cursor:grab;
   }
   .pt-dot.first{border-color:var(--ok)}
+  .sk-dot{
+    width:9px;height:9px;border-radius:50%;background:#00e5ff;border:1.5px solid #04222a;
+    box-shadow:0 1px 3px #000a;cursor:grab;
+  }
+  .sk-dot.end{background:#fff;border-color:#00e5ff;width:11px;height:11px;margin:-1px}
+  .tf-dot{
+    width:13px;height:13px;border-radius:3px;background:#fff;border:2px solid var(--accent);
+    box-shadow:0 1px 4px #0009;cursor:nwse-resize;
+  }
+  .tf-dot.move{border-radius:50%;cursor:move;background:var(--accent);border-color:#fff}
+  .tf-dot.rot{border-radius:50%;cursor:grab;background:var(--accent);border-color:#fff}
+  #boundBar{border:1px solid var(--accent);border-radius:9px;background:#211f36;padding:8px 10px;margin-top:8px}
+  .se-flag{
+    display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;
+    font-size:10px;font-weight:800;letter-spacing:.02em;box-shadow:0 2px 6px #0009;border:2px solid #fff;
+  }
+  .se-flag.start{background:#12b981;color:#04241a}
+  .se-flag.finish{background:#ff2d55;color:#fff}
+  .se-flag.both{background:#12b981;color:#04241a;width:30px;height:30px;border-radius:50%;font-size:9px}
+  .dir-arrow{
+    width:0;height:0;border-left:10px solid #fff;border-top:5.5px solid transparent;
+    border-bottom:5.5px solid transparent;transform-origin:3px 50%;
+    filter:drop-shadow(0 0 1px #0009) drop-shadow(0 0 2px #0006);
+  }
   h2 .step{
     display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
     border-radius:50%;background:var(--accent);color:#fff;font-size:10px;font-weight:700;margin-right:7px;
@@ -166,6 +190,17 @@
       <input type="file" id="file" accept="image/*" hidden>
       <canvas id="skelPreview" width="584" height="264"></canvas>
       <p class="hint" id="skelStats" style="margin-top:6px">Your logo's centerline shows up here.</p>
+      <div class="row" style="margin-top:7px">
+        <button id="editShape" aria-pressed="false" style="flex:1">Edit the shape's points</button>
+        <button id="resetShape" title="Throw the edits away and go back to the traced centerline">Reset</button>
+      </div>
+      <div id="shapeEditBox" style="display:none;margin-top:6px">
+        <p class="hint" id="shapeEditHint" style="margin:0"></p>
+        <label class="between" style="margin-top:7px">
+          <span>Logo underneath</span><span class="val" id="shapeOpacityVal">55%</span>
+        </label>
+        <input type="range" id="shapeOpacity" min="0" max="100" value="55">
+      </div>
 
       <details>
         <summary>Fine-tune the tracing</summary>
@@ -278,6 +313,23 @@
         <div class="stat"><span>Points</span><b id="ptCount">0</b></div>
       </div>
       <p class="hint" id="targetOut" style="margin-top:7px"></p>
+
+      <div class="row" style="margin-top:8px">
+        <button id="setStart" style="flex:1">Set start point</button>
+        <button id="revRoute" style="flex:1">Reverse</button>
+      </div>
+      <p class="hint" id="endsHint" style="margin-top:6px"></p>
+
+      <div id="boundBar" style="display:none">
+        <div style="font-size:11.5px;line-height:1.45" id="boundBlurb">
+          <b>Linked to the shape.</b> Drag the route to move it, a corner to resize,
+          the handle above it to spin.
+        </div>
+        <p class="hint" id="boundStatus" style="margin:5px 0 0"></p>
+        <button id="unbind" style="width:100%;margin-top:7px;font-size:11px;padding:4px">
+          Unlink so I can move single points
+        </button>
+      </div>
 
       <details>
         <summary>Edit by hand</summary>
@@ -396,7 +448,11 @@
     distMin: 5, distMax: 10, distUnit: "mi",
     area: null,           // {south,west,north,east}; null follows the map view
     trace: "streets",     // "streets" | "open"
-    minAreaAcres: 5
+    minAreaAcres: 5,
+    shapeEdit: null,      // hand-edited centerline, in the traced image's pixels
+    bound: false,         // route IS the shape: move/scale/rotate it as one piece
+    startIdx: 0,          // where a linked route starts, along the drawing order
+    reverse: false        // run the drawing order the other way
   };
 
   /* ---------------------------------------------------------------- map */
@@ -498,6 +554,16 @@
     return out;
   }
 
+  /* Either direction of a pair is the same path, so a reversed route reuses
+     everything already routed instead of asking the router again. */
+  function segLookup(a, b) {
+    var k = segKey(a, b, state.profile, state.snap);
+    if (segCache[k]) return segCache[k];
+    var rk = segKey(b, a, state.profile, state.snap);
+    if (segCache[rk]) return segCache[rk].slice().reverse();
+    return null;
+  }
+
   function fetchSegment(a, b) {
     var url = "https://brouter.de/brouter?lonlats=" +
       a.lng.toFixed(6) + "," + a.lat.toFixed(6) + "|" +
@@ -523,7 +589,7 @@
 
     ps.forEach(function (p) {
       var k = segKey(p[0], p[1], state.profile, state.snap);
-      if (!segCache[k]) needed.push({ key: k, a: p[0], b: p[1] });
+      if (!segLookup(p[0], p[1])) needed.push({ key: k, a: p[0], b: p[1] });
     });
 
     // straight segments are free
@@ -573,7 +639,7 @@
   function fullLine() {
     var out = [];
     pairs().forEach(function (p) {
-      var seg = segCache[segKey(p[0], p[1], state.profile, state.snap)];
+      var seg = segLookup(p[0], p[1]);
       if (!seg) return;
       if (out.length) out = out.concat(seg.slice(1));
       else out = out.concat(seg);
@@ -599,7 +665,13 @@
     routeLine.setLatLngs(line);
 
     markerLayer.clearLayers();
-    state.points.forEach(function (p, i) {
+    refreshBound();
+    drawEnds(line);
+    drawArrows(line);
+    /* A linked route is moved as a whole, so it gets transform handles instead
+       of three hundred point dots. */
+    if (state.bound) drawTransform();
+    else state.points.forEach(function (p, i) {
       var m = L.marker([p.lat, p.lng], {
         draggable: true,
         icon: L.divIcon({ className: "", html: '<div class="pt-dot' + (i === 0 ? " first" : "") + '"></div>', iconSize: [11, 11], iconAnchor: [5.5, 5.5] })
@@ -624,6 +696,142 @@
     var meters = 0, i;
     for (i = 1; i < line.length; i++) meters += haversine(line[i - 1], line[i]);
     updateStats(meters);
+  }
+
+  var endsLayer = L.layerGroup().addTo(map);
+  var arrowLayer = L.layerGroup().addTo(map);
+  var lastLine = null;
+  var armStart = false;
+
+  /* Which way round does it go? Chevrons along the line, spaced by how long the
+     route looks on screen rather than how long it is, so they stay readable at
+     any zoom. */
+  function drawArrows(line) {
+    arrowLayer.clearLayers();
+    lastLine = line && line.length > 1 ? line : null;
+    if (!lastLine) return;
+    var pts = line.map(function (p) { return map.latLngToContainerPoint(p); });
+    var segs = [], total = 0, i;
+    for (i = 1; i < pts.length; i++) {
+      var d = pts[i].distanceTo(pts[i - 1]);
+      segs.push(d);
+      total += d;
+    }
+    if (total < 120) return;
+    var want = clamp(Math.round(total / 110), 3, 26);
+    var step = total / want, next = step * 0.5, acc = 0;
+    for (i = 1; i < pts.length; i++) {
+      var len = segs[i - 1];
+      if (len <= 0) { continue; }
+      while (acc + len >= next) {
+        var t = (next - acc) / len;
+        var lat = line[i - 1][0] + (line[i][0] - line[i - 1][0]) * t;
+        var lng = line[i - 1][1] + (line[i][1] - line[i - 1][1]) * t;
+        var ang = Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x) * 180 / Math.PI;
+        arrowLayer.addLayer(L.marker([lat, lng], {
+          interactive: false, keyboard: false, zIndexOffset: 400,
+          icon: L.divIcon({ className: "", iconSize: [12, 11], iconAnchor: [3, 5.5],
+            html: '<div class="dir-arrow" style="transform:rotate(' + ang.toFixed(1) + 'deg)"></div>' })
+        }));
+        next += step;
+      }
+      acc += len;
+    }
+  }
+
+  map.on("zoomend", function () { if (lastLine) drawArrows(lastLine); });
+
+  function samePlace(a, b) {
+    return haversine(a, b) < Math.max(12, state.widthM * 0.02);
+  }
+
+  /* A loop can start anywhere on itself; an out-and-back can only start at one
+     of its two ends, so there the honest offer is Reverse, not "pick a point". */
+  function routeIsLoop() {
+    var p = state.points;
+    if (p.length < 4) return false;
+    return samePlace([p[0].lat, p[0].lng], [p[p.length - 1].lat, p[p.length - 1].lng]);
+  }
+
+  function rotateLoop(arr, k, get) {
+    var n = arr.length;
+    if (n < 3 || !k) return arr;
+    var closed = samePlace(get(arr[0]), get(arr[n - 1]));
+    var body = closed ? arr.slice(0, n - 1) : arr.slice();
+    k = ((k % body.length) + body.length) % body.length;
+    if (!closed) return arr;                 // an open path keeps its two ends
+    var out = body.slice(k).concat(body.slice(0, k));
+    out.push(out[0]);
+    return out;
+  }
+
+  function nearestPointIndex(latlng) {
+    var best = 0, bd = Infinity, i, d;
+    for (i = 0; i < state.points.length; i++) {
+      d = haversine([latlng.lat, latlng.lng], [state.points[i].lat, state.points[i].lng]);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+
+  function setStartNear(latlng) {
+    if (!state.points.length) return;
+    if (!routeIsLoop()) { toast("This route isn't a loop — only its two ends can be the start."); return; }
+    var i = nearestPointIndex(latlng);
+    if (state.bound) {
+      state.startIdx = state.startIdx + i;
+      regenBound(false);
+    } else {
+      state.points = rotateLoop(state.points, i, function (p) { return [p.lat, p.lng]; });
+      renderRoute();
+      save();
+    }
+    toast("Start moved. The finish comes back to the same spot.");
+  }
+
+  function reverseRoute() {
+    if (state.points.length < 2) return;
+    if (state.bound) {
+      state.reverse = !state.reverse;
+      regenBound(false);
+    } else {
+      state.points.reverse();
+      renderRoute();
+      save();
+    }
+    toast("Running it the other way round.");
+  }
+
+  function drawEnds(lineOpt) {
+    endsLayer.clearLayers();
+    var line = lineOpt || fullLine();
+    if (line.length < 2) {
+      $("endsHint").textContent = "";
+      $("setStart").disabled = true;
+      return;
+    }
+    var a = line[0], b = line[line.length - 1];
+    var loop = samePlace(a, b);
+    function flag(at, cls, txt) {
+      return L.marker(at, {
+        interactive: false, keyboard: false, zIndexOffset: 900,
+        icon: L.divIcon({ className: "", iconSize: loop ? [30, 30] : [24, 24],
+                          iconAnchor: loop ? [15, 15] : [12, 12],
+                          html: '<div class="se-flag ' + cls + '">' + txt + "</div>" })
+      });
+    }
+    if (loop) {
+      endsLayer.addLayer(flag(a, "both", "S/F"));
+      $("endsHint").innerHTML = "Loop — starts and finishes at the green marker, " +
+        "running the way the arrows point. <b>Set start point</b>, then click anywhere " +
+        "on the route to move it.";
+    } else {
+      endsLayer.addLayer(flag(a, "start", "S"));
+      endsLayer.addLayer(flag(b, "finish", "F"));
+      $("endsHint").innerHTML = "Starts at <b>S</b>, finishes at <b>F</b>, running the way " +
+        "the arrows point — not a loop, so <b>Reverse</b> is the only way to swap them.";
+    }
+    $("setStart").disabled = !loop;
   }
 
   function updateStats(meters) {
@@ -669,6 +877,21 @@
 
   var drag = null;
 
+  function beginTransform(latlng, kind) {
+    drag = {
+      startLatLng: latlng,
+      startCenter: { lat: state.center.lat, lng: state.center.lng },
+      startRot: state.rotation,
+      startWidth: state.widthM,
+      startPt: map.latLngToContainerPoint(latlng),
+      kind: kind
+    };
+    var c0 = map.latLngToContainerPoint(state.center);
+    drag.baseAngle = Math.atan2(drag.startPt.y - c0.y, drag.startPt.x - c0.x);
+    map.dragging.disable();
+    L.DomUtil.disableTextSelection();
+  }
+
   map.on("mousedown", function (e) {
     if (state.mode !== "adjust" || !state.img) return;
     var oe = e.originalEvent;
@@ -707,6 +930,9 @@
       syncSizeUI();
     }
     drawOverlay();
+    refreshStrokeLines();
+    syncTransform(null);
+    regenBound(true);
   });
 
   function endDrag() {
@@ -714,13 +940,23 @@
     drag = null;
     map.dragging.enable();
     L.DomUtil.enableTextSelection();
+    regenBound(false);
+    drawSkeletonOverlay(true);
     save();
   }
   map.on("mouseup", endDrag);
   document.addEventListener("mouseup", endDrag);
 
   map.on("click", function (e) {
+    if (armStart) {
+      armStart = false;
+      map.getContainer().style.cursor = state.mode === "draw" ? "crosshair" : "";
+      $("setStart").setAttribute("aria-pressed", "false");
+      setStartNear(e.latlng);
+      return;
+    }
     if (state.mode !== "draw") return;
+    if (state.bound) unbind();
     state.points.push({ lat: e.latlng.lat, lng: e.latlng.lng });
     renderRoute();
     save();
@@ -732,11 +968,30 @@
     adjust: { chip: "Move logo — drag the map",
               hint: 'Dragging moves the logo. <kbd>shift</kbd>+drag rotates, <kbd>alt</kbd>+drag resizes.' },
     draw:   { chip: "Draw route — click to add points",
-              hint: "Click to drop points. Drag one to move it, right-click to delete it." }
+              hint: "Click to drop points. Drag one to move it, right-click to delete it." },
+    shape:  { chip: "Edit shape — drag its points",
+              hint: "Drag a point to move it, click a line to add one, right-click a point to remove it." }
   };
 
+  var wantedMode = null;
+
   function setMode(m) {
+    if (m === "shape" && !shapeSrc()) {
+      toast("Trace a logo first — there are no points to edit yet.");
+      m = "pan";
+    }
     state.mode = m;
+    if (m === "shape") {
+      if (!skelOpts.show) {
+        skelOpts.show = true;
+        $("showSkel").checked = true;
+      }
+      /* No point dragging points over a logo you can't see. */
+      if (state.img && state.opacity < 0.15) {
+        setOpacity(55);
+        toast("Turned the logo overlay back up so you can see what you're tracing.");
+      }
+    }
     $("modePan").setAttribute("aria-pressed", m === "pan");
     $("modeAdjust").setAttribute("aria-pressed", m === "adjust");
     $("modeDraw").setAttribute("aria-pressed", m === "draw");
@@ -745,6 +1000,8 @@
     if (t.chip) $("cursorMode").textContent = t.chip;
     $("modeHint").innerHTML = t.hint;
     map.getContainer().style.cursor = m === "draw" ? "crosshair" : "";
+    shapeEditStats();
+    drawSkeletonOverlay(true);
     save();
   }
 
@@ -843,6 +1100,7 @@
      the exact path — otherwise every segment gets re-routed and the shape drifts. */
   function currentSegments() {
     var out = {};
+    if (!state.snap) return out;      // straight legs cost nothing to rebuild
     try {
       pairs().forEach(function (p) {
         var k = segKey(p[0], p[1], state.profile, state.snap);
@@ -965,21 +1223,41 @@
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) loadImageFile(e.dataTransfer.files[0]);
   });
 
-  $("opacity").addEventListener("input", function (e) {
-    state.opacity = e.target.value / 100;
-    $("opacityVal").textContent = e.target.value + "%";
-    applyImageStyle(); save();
+  function setOpacity(pct) {
+    state.opacity = clamp(pct, 0, 100) / 100;
+    var shown = Math.round(state.opacity * 100);
+    $("opacity").value = shown;
+    $("opacityVal").textContent = shown + "%";
+    $("shapeOpacity").value = shown;
+    $("shapeOpacityVal").textContent = shown + "%";
+    applyImageStyle();
+    save();
+  }
+
+  $("opacity").addEventListener("input", function (e) { setOpacity(+e.target.value); });
+  $("shapeOpacity").addEventListener("input", function (e) { setOpacity(+e.target.value); });
+
+  $("setStart").addEventListener("click", function () {
+    if (!state.points.length) { toast("No route to start yet."); return; }
+    if (!routeIsLoop()) { toast("This route isn't a loop — use Reverse to swap its ends."); return; }
+    armStart = true;
+    $("setStart").setAttribute("aria-pressed", "true");
+    map.getContainer().style.cursor = "crosshair";
+    toast("Click anywhere on the route to start there.");
   });
+  $("revRoute").addEventListener("click", reverseRoute);
   $("size").addEventListener("input", function (e) {
     state.widthM = sliderToSize(+e.target.value);
     $("sizeVal").textContent = fmtLen(state.widthM);
-    drawOverlay(); save();
+    drawOverlay(); regenBound(true); save();
   });
+  $("size").addEventListener("change", function () { regenBound(false); });
   $("rot").addEventListener("input", function (e) {
     state.rotation = +e.target.value;
     $("rotVal").textContent = state.rotation.toFixed(1) + "°";
-    drawOverlay(); save();
+    drawOverlay(); regenBound(true); save();
   });
+  $("rot").addEventListener("change", function () { regenBound(false); });
   $("blend").addEventListener("change", function (e) { state.blend = e.target.value; applyImageStyle(); save(); });
   $("invert").addEventListener("change", function (e) { state.invert = e.target.checked; applyImageStyle(); save(); });
   $("punch").addEventListener("change", function (e) { state.punch = e.target.checked; applyImageStyle(); save(); });
@@ -998,6 +1276,15 @@
     drawOverlay(); updateSkeleton(); save();
   });
 
+  $("editShape").addEventListener("click", function () {
+    setMode(state.mode === "shape" ? "pan" : "shape");
+  });
+  $("resetShape").addEventListener("click", resetShape);
+  $("unbind").addEventListener("click", function () {
+    if (state.bound) unbind();
+    else relink();
+  });
+
   $("modePan").addEventListener("click", function () { setMode("pan"); });
   $("modeAdjust").addEventListener("click", function () { setMode("adjust"); });
   $("modeDraw").addEventListener("click", function () { setMode("draw"); });
@@ -1006,8 +1293,14 @@
   $("profile").addEventListener("change", function (e) { state.profile = e.target.value; renderRoute(); save(); });
   $("closed").addEventListener("change", function (e) { state.closed = e.target.checked; renderRoute(); save(); });
 
-  $("undo").addEventListener("click", function () { state.points.pop(); renderRoute(); save(); });
-  $("clearRoute").addEventListener("click", function () { state.points = []; renderRoute(); save(); });
+  $("undo").addEventListener("click", function () {
+    unbind(true);
+    state.points.pop(); renderRoute(); save();
+  });
+  $("clearRoute").addEventListener("click", function () {
+    unbind(true);
+    state.points = []; renderRoute(); save();
+  });
 
   ["distMin", "distMax", "distUnit"].forEach(function (id) {
     $(id).addEventListener("input", function () {
@@ -1033,11 +1326,16 @@
     var big = e.shiftKey, k = e.key;
 
     if (k === "m" || k === "M") {
-      var order = ["pan", "adjust", "draw"];
-      setMode(order[(order.indexOf(state.mode) + 1) % 3]);
+      var order = shapeSrc() ? ["pan", "adjust", "draw", "shape"] : ["pan", "adjust", "draw"];
+      setMode(order[(order.indexOf(state.mode) + 1) % order.length]);
       return;
     }
-    if (k === "u" || k === "U") { state.points.pop(); renderRoute(); save(); return; }
+    if (k === "u" || k === "U") {
+      if (state.mode === "shape") { undoShape(); return; }
+      unbind(true);
+      state.points.pop(); renderRoute(); save();
+      return;
+    }
     if (k === "Escape") { setMode("pan"); return; }
 
     if (!state.img) return;
@@ -1063,6 +1361,7 @@
       $("rotVal").textContent = state.rotation.toFixed(1) + "°";
       syncSizeUI();
       drawOverlay();
+      regenBound(false);
       save();
     }
   });
@@ -1086,24 +1385,539 @@
     ];
   }
 
+  /* The shape in play: the hand-edited copy if there is one, else the trace. */
+  function shapeSrc() {
+    if (state.shapeEdit && state.shapeEdit.strokes && state.shapeEdit.strokes.length) return state.shapeEdit;
+    return skel;
+  }
+
   function strokeToShapeUnits(stroke) {
-    var W = skel.width, H = skel.height;
+    var src = shapeSrc(), W = src.width, H = src.height;
     return stroke.map(function (p) { return [(p[0] - W / 2) / W, -(p[1] - H / 2) / W]; });
   }
 
   /* Ordered + oriented runs, in shape units — what the matcher searches with. */
   function shapeRuns() {
-    if (!skel || !skel.strokes.length) return [];
-    return Skeleton.drawingRuns(skel.strokes).map(strokeToShapeUnits);
+    var src = shapeSrc();
+    if (!src || !src.strokes.length) return [];
+    return Skeleton.drawingRuns(src.strokes).map(strokeToShapeUnits);
   }
 
-  function drawSkeletonOverlay() {
+  /* A map position back in the logo's own frame — metres, then shape units. */
+  function localMeters(lat, lng) {
+    var th = state.rotation * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
+    var north = (lat - state.center.lat) * 110574;
+    var east = (lng - state.center.lng) * (111320 * Math.cos(state.center.lat * Math.PI / 180));
+    return [east * c - north * sn, east * sn + north * c];
+  }
+
+  function latLngToShape(lat, lng) {
+    var m = localMeters(lat, lng);
+    return [m[0] / state.widthM, m[1] / state.widthM];
+  }
+
+  function shapeToPixel(u, v) {
+    var src = shapeSrc(), W = src.width, H = src.height;
+    return [u * W + W / 2, -v * W + H / 2];
+  }
+
+  function strokeLatLngs(st) {
+    return strokeToShapeUnits(st).map(function (uv) { return shapeToLatLng(uv[0], uv[1]); });
+  }
+
+  var strokeLines = [];     // the drawn polylines, one per stroke
+  var hitLines = [];        // fat invisible twins, so clicking a line is forgiving
+  var handleDrag = null;    // the marker currently being dragged, if any
+  var shapeRev = 0;         // bumped whenever the strokes themselves change
+  var skelSig = "";
+
+  /* Leaflet moves polylines itself, so this only has to run when the shape or
+     its placement changes — not on every pan frame, which with a few hundred
+     edit handles would be unusable. */
+  function drawSkeletonOverlay(force) {
+    var src = shapeSrc();
+    var sig = [state.center.lat, state.center.lng, state.widthM, state.rotation,
+               state.mode, state.bound, skelOpts.show, state.img ? 1 : 0,
+               src ? src.strokes.length : -1, shapeRev].join("|");
+    if (!force && sig === skelSig) return;
+    skelSig = sig;
+
+    /* Mid-drag the handles must stay put — rebuilding them would yank the one
+       under the cursor out from under it. */
+    if (handleDrag || drag) {
+      refreshStrokeLines();
+      syncTransform(handleDrag);
+      return;
+    }
+
     skelLayer.clearLayers();
-    if (!skel || !skelOpts.show || !state.img) return;
-    skel.strokes.forEach(function (st) {
-      var ll = strokeToShapeUnits(st).map(function (uv) { return shapeToLatLng(uv[0], uv[1]); });
-      L.polyline(ll, { color: "#00e5ff", weight: 2, opacity: 0.95, interactive: false }).addTo(skelLayer);
+    shapeHandles.clearLayers();
+    strokeLines = [];
+    hitLines = [];
+    if (!src || !skelOpts.show || !state.img) { drawTransform(); return; }
+
+    var edit = state.mode === "shape";
+    src.strokes.forEach(function (st, si) {
+      var ll = strokeLatLngs(st);
+      var hit = null;
+      if (edit) {
+        hit = L.polyline(ll, { color: "#7cf3ff", weight: 16, opacity: 0, interactive: true }).addTo(skelLayer);
+      }
+      var line = L.polyline(ll, {
+        color: edit ? "#7cf3ff" : "#00e5ff",
+        weight: edit ? 3 : 2,
+        opacity: 0.95,
+        interactive: false
+      }).addTo(skelLayer);
+      strokeLines.push(line);
+      if (!edit) return;
+      hitLines.push(hit);
+      hit.on("click", function (ev) {
+        if (armStart) return;             // that click is choosing a start
+        L.DomEvent.stop(ev);
+        if (ev.originalEvent && ev.originalEvent.altKey) deleteStroke(si);
+        else insertShapePoint(si, ev.latlng);
+      });
+      hit.on("mouseover", function () { map.getContainer().style.cursor = "copy"; });
+      hit.on("mouseout", function () { map.getContainer().style.cursor = ""; });
+      st.forEach(function (p, pi) { shapeHandles.addLayer(shapeHandle(si, pi)); });
     });
+    drawTransform();
+  }
+
+  function refreshStrokeLines() {
+    var src = shapeSrc();
+    if (!src) return;
+    for (var i = 0; i < strokeLines.length && i < src.strokes.length; i++) {
+      var ll = strokeLatLngs(src.strokes[i]);
+      strokeLines[i].setLatLngs(ll);
+      if (hitLines[i]) hitLines[i].setLatLngs(ll);
+    }
+  }
+
+  /* ------------------------------------------------ editing the shape itself */
+
+  var shapeHandles = L.layerGroup().addTo(map);
+  var shapeUndo = [];
+
+  /* Edits live on a copy of the trace, so the tracing sliders can always take
+     it back and nothing is destroyed by a stray drag. */
+  function ensureEditable() {
+    if (!state.shapeEdit && skel) {
+      state.shapeEdit = {
+        width: skel.width, height: skel.height,
+        strokes: skel.strokes.map(function (st) {
+          return st.map(function (p) { return [p[0], p[1]]; });
+        })
+      };
+    }
+    return state.shapeEdit;
+  }
+
+  function pushShapeUndo() {
+    var src = shapeSrc();
+    if (!src) return;
+    shapeUndo.push(JSON.stringify(src.strokes));
+    if (shapeUndo.length > 40) shapeUndo.shift();
+  }
+
+  function undoShape() {
+    if (!shapeUndo.length) { toast("Nothing left to undo."); return; }
+    ensureEditable();
+    state.shapeEdit.strokes = JSON.parse(shapeUndo.pop());
+    if (!state.shapeEdit.strokes.length) state.shapeEdit = null;
+    afterShapeEdit();
+  }
+
+  function afterShapeEdit() {
+    shapeRev++;
+    drawSkeletonOverlay(true);
+    drawPreviewCanvas();
+    shapeEditStats();
+    regenBound(false);
+    save();
+  }
+
+  function drawPreviewCanvas() {
+    var src = shapeSrc();
+    if (!src || !srcImage) return;
+    Skeleton.preview({ width: src.width, height: src.height, strokes: src.strokes },
+                     $("skelPreview"), srcImage);
+  }
+
+  function shapeHandle(si, pi) {
+    var src = shapeSrc();
+    var st = src.strokes[si];
+    var uv = strokeToShapeUnits([st[pi]])[0];
+    var end = pi === 0 || pi === st.length - 1;
+    var m = L.marker(shapeToLatLng(uv[0], uv[1]), {
+      draggable: true, keyboard: false,
+      icon: L.divIcon({ className: "", iconSize: [9, 9], iconAnchor: [4.5, 4.5],
+                        html: '<div class="sk-dot' + (end ? " end" : "") + '"></div>' })
+    });
+    m.on("dragstart", function () {
+      pushShapeUndo();
+      ensureEditable();
+      handleDrag = m;
+    });
+    m.on("drag", function (e) {
+      var u = latLngToShape(e.latlng.lat, e.latlng.lng);
+      state.shapeEdit.strokes[si][pi] = shapeToPixel(u[0], u[1]);
+      refreshStrokeLines();
+      syncTransform(m);
+      regenBound(true);
+    });
+    m.on("dragend", function () { handleDrag = null; afterShapeEdit(); });
+    m.on("contextmenu", function (e) { L.DomEvent.stop(e); deleteShapePoint(si, pi); });
+    return m;
+  }
+
+  function segDistPx(p, a, b) {
+    var dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+    var t = L2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2 : 0;
+    t = clamp(t, 0, 1);
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+  }
+
+  function insertShapePoint(si, latlng) {
+    pushShapeUndo();
+    ensureEditable();
+    var st = state.shapeEdit.strokes[si];
+    var u = latLngToShape(latlng.lat, latlng.lng);
+    var px = shapeToPixel(u[0], u[1]);
+    var at = 1, best = Infinity, i, d;
+    for (i = 1; i < st.length; i++) {
+      d = segDistPx(px, st[i - 1], st[i]);
+      if (d < best) { best = d; at = i; }
+    }
+    st.splice(at, 0, px);
+    afterShapeEdit();
+  }
+
+  function deleteShapePoint(si, pi) {
+    pushShapeUndo();
+    ensureEditable();
+    var st = state.shapeEdit.strokes[si];
+    if (st.length <= 3) {
+      state.shapeEdit.strokes.splice(si, 1);
+      toast("That stroke got too short to keep — U puts it back.");
+    } else {
+      st.splice(pi, 1);
+    }
+    afterShapeEdit();
+  }
+
+  function deleteStroke(si) {
+    pushShapeUndo();
+    ensureEditable();
+    state.shapeEdit.strokes.splice(si, 1);
+    afterShapeEdit();
+    toast("Stroke deleted — press U to undo.");
+  }
+
+  function resetShape() {
+    if (!state.shapeEdit) { toast("This is already the traced centerline."); return; }
+    pushShapeUndo();
+    state.shapeEdit = null;
+    afterShapeEdit();
+    toast("Back to the traced centerline.");
+  }
+
+  function shapeEditStats() {
+    var src = shapeSrc(), edit = state.mode === "shape";
+    var btn = $("editShape"), hint = $("shapeEditHint");
+    btn.disabled = !src;
+    btn.setAttribute("aria-pressed", edit ? "true" : "false");
+    btn.textContent = edit ? "Done editing points" : "Edit the shape's points";
+    $("resetShape").disabled = !state.shapeEdit;
+    $("shapeEditBox").style.display = (edit && src) ? "" : "none";
+    if (!edit || !src) { hint.style.display = "none"; return; }
+    var n = src.strokes.reduce(function (a, st) { return a + st.length; }, 0);
+    hint.style.display = "";
+    hint.innerHTML = n + " points on " + src.strokes.length + " stroke" +
+      (src.strokes.length === 1 ? "" : "s") + ".<br>" +
+      "Drag one to move it · click a line to add one · right-click one to remove it · " +
+      "<kbd>alt</kbd>+click a line deletes that whole stroke · <kbd>U</kbd> undoes." +
+      (n > 400 ? '<br><span style="color:#e8cc63">That is a lot of handles. Raise ' +
+                 "Smoothing under “Fine-tune the tracing” for fewer, bigger ones.</span>" : "");
+  }
+
+  /* ------------------------------- moving a traced route as a single object */
+
+  var tfLayer = L.layerGroup().addTo(map);
+  var tf = null;
+
+  /* On open ground the route IS the drawing, so it can be picked up and moved
+     as one piece — regenerated from the shape whenever the placement changes. */
+  function boundLatLngs() {
+    var out = [];
+    shapeRuns().forEach(function (run) {
+      run.forEach(function (uv) { out.push(shapeToLatLng(uv[0], uv[1])); });
+    });
+    out = decimate(out, 300);
+    if (state.reverse) out.reverse();
+    if (state.startIdx) out = rotateLoop(out, state.startIdx, function (pt) { return pt; });
+    return out;
+  }
+
+  function regenBound(live) {
+    if (!state.bound) return;
+    var pts = boundLatLngs();
+    if (pts.length < 2) { state.bound = false; refreshBound(); return; }
+    state.points = pts.map(function (a) { return { lat: a[0], lng: a[1] }; });
+    if (live) {
+      var l = state.points.map(function (p) { return [p.lat, p.lng]; });
+      routeCasing.setLatLngs(l);
+      routeLine.setLatLngs(l);
+      var m = 0, i;
+      for (i = 1; i < l.length; i++) m += haversine(l[i - 1], l[i]);
+      updateStats(m);
+      drawEnds(l);
+      drawArrows(l);
+      return;
+    }
+    if (!state.snap) segCache = {};   // straight legs cost nothing to rebuild
+    renderRoute();
+    save();
+  }
+
+  function unbind(silent) {
+    if (!state.bound) return;
+    state.bound = false;
+    drawSkeletonOverlay(true);
+    paint();
+    save();
+    if (!silent) toast("Unlinked — every point is yours to drag now.");
+  }
+
+  function shapeExtent() {
+    var src = shapeSrc();
+    if (!src || !src.strokes.length) return null;
+    var u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    src.strokes.forEach(function (st) {
+      strokeToShapeUnits(st).forEach(function (uv) {
+        if (uv[0] < u0) u0 = uv[0];
+        if (uv[0] > u1) u1 = uv[0];
+        if (uv[1] < v0) v0 = uv[1];
+        if (uv[1] > v1) v1 = uv[1];
+      });
+    });
+    if (!isFinite(u0)) return null;
+    var pad = 0.05 * Math.max(u1 - u0, v1 - v0, 0.05);
+    u0 -= pad; u1 += pad; v0 -= pad; v1 += pad;
+    return {
+      corners: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
+      mid: [(u0 + u1) / 2, (v0 + v1) / 2],
+      stem: [(u0 + u1) / 2, v1],
+      rot: [(u0 + u1) / 2, v1 + Math.max(0.07, pad * 2)]
+    };
+  }
+
+  function uvLL(uv) { return shapeToLatLng(uv[0], uv[1]); }
+
+  function drawTransform() {
+    tfLayer.clearLayers();
+    tf = null;
+    if (routeLine._path) routeLine._path.style.cursor = state.bound ? "move" : "";
+    var g = state.bound ? shapeExtent() : null;
+    if (!g) return;
+
+    var box = L.polygon(g.corners.map(uvLL), {
+      color: "#735cc6", weight: 1.5, opacity: 0.9, dashArray: "6,6",
+      fill: false, interactive: false
+    }).addTo(tfLayer);
+    var stem = L.polyline([uvLL(g.stem), uvLL(g.rot)],
+      { color: "#735cc6", weight: 1.5, opacity: 0.9, interactive: false }).addTo(tfLayer);
+
+    tf = { box: box, stem: stem, corners: [], rot: null, move: null };
+    g.corners.forEach(function (uv) {
+      var m = scaleHandle(uv);
+      tf.corners.push(m);
+      tfLayer.addLayer(m);
+    });
+    tf.rot = rotateHandle(g.rot);
+    tf.move = moveHandle(g.mid);
+    tfLayer.addLayer(tf.rot);
+    tfLayer.addLayer(tf.move);
+  }
+
+  /* Reposition the handles without rebuilding them, so a drag survives. */
+  function syncTransform(except) {
+    if (!tf) return;
+    var g = shapeExtent();
+    if (!g) return;
+    tf.box.setLatLngs(g.corners.map(uvLL));
+    tf.stem.setLatLngs([uvLL(g.stem), uvLL(g.rot)]);
+    tf.corners.forEach(function (m, i) { if (m !== except) m.setLatLng(uvLL(g.corners[i])); });
+    if (tf.rot !== except) tf.rot.setLatLng(uvLL(g.rot));
+    if (tf.move !== except) tf.move.setLatLng(uvLL(g.mid));
+  }
+
+  function tfMarker(latlng, cls, cursor) {
+    return L.marker(latlng, {
+      draggable: true, keyboard: false,
+      icon: L.divIcon({ className: "", iconSize: [13, 13], iconAnchor: [6.5, 6.5],
+                        html: '<div class="tf-dot ' + cls + '"></div>' })
+    });
+  }
+
+  function endHandleDrag() {
+    handleDrag = null;
+    regenBound(false);
+    drawSkeletonOverlay(true);
+    save();
+  }
+
+  /* Uniform scale about the centre: project the pointer onto the corner's own
+     ray, so the corner tracks the mouse and the shape keeps its proportions. */
+  function scaleHandle(uv) {
+    var m = tfMarker(uvLL(uv), "", "nwse-resize");
+    var den = uv[0] * uv[0] + uv[1] * uv[1];
+    m.on("dragstart", function () { handleDrag = m; });
+    m.on("drag", function (e) {
+      if (den < 1e-9) return;
+      var loc = localMeters(e.latlng.lat, e.latlng.lng);
+      state.widthM = clamp((loc[0] * uv[0] + loc[1] * uv[1]) / den, 20, 200000);
+      syncSizeUI();
+      drawOverlay();
+      refreshStrokeLines();
+      syncTransform(m);
+      regenBound(true);
+    });
+    m.on("dragend", endHandleDrag);
+    return m;
+  }
+
+  function rotateHandle(uv) {
+    var m = tfMarker(uvLL(uv), "rot", "grab");
+    var base = null;
+    m.on("dragstart", function () {
+      handleDrag = m;
+      var c = map.latLngToContainerPoint(state.center);
+      var p = map.latLngToContainerPoint(m.getLatLng());
+      base = { ang: Math.atan2(p.y - c.y, p.x - c.x), rot: state.rotation };
+    });
+    m.on("drag", function (e) {
+      var c = map.latLngToContainerPoint(state.center);
+      var p = map.latLngToContainerPoint(e.latlng);
+      var ang = Math.atan2(p.y - c.y, p.x - c.x);
+      var deg = base.rot + (ang - base.ang) * 180 / Math.PI;
+      if (e.originalEvent && e.originalEvent.shiftKey) deg = Math.round(deg / 15) * 15;
+      state.rotation = normDeg(deg);
+      $("rot").value = state.rotation;
+      $("rotVal").textContent = state.rotation.toFixed(1) + "°";
+      drawOverlay();
+      refreshStrokeLines();
+      syncTransform(m);
+      regenBound(true);
+    });
+    m.on("dragend", endHandleDrag);
+    return m;
+  }
+
+  function moveHandle(uv) {
+    var m = tfMarker(uvLL(uv), "move", "move");
+    var off = null;
+    m.on("dragstart", function () {
+      handleDrag = m;
+      var at = m.getLatLng();
+      off = { lat: state.center.lat - at.lat, lng: state.center.lng - at.lng };
+    });
+    m.on("drag", function (e) {
+      state.center = { lat: e.latlng.lat + off.lat, lng: e.latlng.lng + off.lng };
+      drawOverlay();
+      refreshStrokeLines();
+      syncTransform(m);
+      regenBound(true);
+    });
+    m.on("dragend", endHandleDrag);
+    return m;
+  }
+
+  /* Dragging the route itself moves the whole thing — no handle to find. */
+  routeLine.on("mousedown", function (e) {
+    if (armStart) return;                 // this click is choosing a start
+    if (!state.bound || state.mode === "draw") return;
+    L.DomEvent.stop(e);
+    beginTransform(e.latlng, "move");
+  });
+
+  function polyBox(poly) {
+    if (poly._bb) return poly._bb;
+    var s = Infinity, w = Infinity, n = -Infinity, e = -Infinity;
+    poly.pts.forEach(function (p) {
+      if (p[0] < s) s = p[0];
+      if (p[0] > n) n = p[0];
+      if (p[1] < w) w = p[1];
+      if (p[1] > e) e = p[1];
+    });
+    poly._bb = [s, w, n, e];
+    return poly._bb;
+  }
+
+  function pointInPoly(lat, lng, pts) {
+    var inside = false, i, j;
+    for (i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      var yi = pts[i][0], xi = pts[i][1], yj = pts[j][0], xj = pts[j][1];
+      if (((yi > lat) !== (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+
+  /* Once you can drag a route around, you can drag it off the grass — so say so. */
+  function groundReport() {
+    var polys = openPolys && openPolys.polys;
+    if (!polys || !polys.length || !state.points.length) return "";
+    var off = 0, home = null, i, k;
+    for (i = 0; i < state.points.length; i++) {
+      var pt = state.points[i], ok = false;
+      for (k = 0; k < polys.length; k++) {
+        var b = polyBox(polys[k]);
+        if (pt.lat < b[0] || pt.lat > b[2] || pt.lng < b[1] || pt.lng > b[3]) continue;
+        if (!pointInPoly(pt.lat, pt.lng, polys[k].pts)) continue;
+        ok = true;
+        if (!home) home = polys[k].name || polys[k].kind;
+        break;
+      }
+      if (!ok) off++;
+    }
+    if (!off) return '<span style="color:var(--ok)">All of it is on open ground' +
+                     (home ? " — " + home : "") + ".</span>";
+    return '<span style="color:#e8cc63">' + Math.round(100 * off / state.points.length) +
+           "% of it is off the open ground.</span>";
+  }
+
+  /* A route drawn free-hand on open ground can be re-linked; one snapped to
+     streets can't, because the shape isn't what its points follow. */
+  function canRelink() {
+    return !state.bound && !state.snap && !!shapeSrc() && state.points.length > 1;
+  }
+
+  function refreshBound() {
+    var bar = $("boundBar");
+    if (!bar) return;
+    bar.style.display = (state.bound || canRelink()) ? "" : "none";
+    if (state.bound) {
+      $("boundBlurb").innerHTML = "<b>Linked to the shape.</b> Drag the route to move it, " +
+        "a corner to resize, the handle above it to spin.";
+      $("boundStatus").innerHTML = groundReport();
+      $("unbind").textContent = "Unlink so I can move single points";
+    } else {
+      $("boundBlurb").innerHTML = "<b>Not linked.</b> Every point moves on its own.";
+      $("boundStatus").innerHTML = "";
+      $("unbind").textContent = "Link it back to the shape";
+    }
+  }
+
+  function relink() {
+    if (!canRelink()) return;
+    state.bound = true;
+    state.startIdx = 0;
+    state.reverse = false;
+    regenBound(false);
+    drawSkeletonOverlay(true);
+    toast("Linked — the route traces the shape again.");
   }
 
   var skelTimer;
@@ -1112,13 +1926,18 @@
     skelTimer = setTimeout(updateSkeleton, 130);
   }
 
-  function updateSkeleton() {
+  function updateSkeleton(keepEdits) {
     var cv = $("skelPreview");
+    shapeRev++;
     if (!srcImage) {
       skel = null;
+      state.shapeEdit = null;
+      shapeUndo.length = 0;
+      if (state.bound) unbind(true);
       cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
       $("skelStats").textContent = "Load an image to trace its centerline.";
-      drawSkeletonOverlay();
+      shapeEditStats();
+      drawSkeletonOverlay(true);
       return;
     }
     var t0 = performance.now();
@@ -1136,7 +1955,15 @@
       $("skelStats").textContent = "Couldn't trace that image: " + err.message;
       return;
     }
-    Skeleton.preview(skel, cv, srcImage);
+    /* Re-tracing rebuilds the geometry the edits were made on, so they can't
+       survive it — say so rather than silently throwing work away. */
+    if (state.shapeEdit && (!keepEdits ||
+        state.shapeEdit.width !== skel.width || state.shapeEdit.height !== skel.height)) {
+      state.shapeEdit = null;
+      shapeUndo.length = 0;
+      toast("Re-traced from the image — your point edits are gone.");
+    }
+    drawPreviewCanvas();
     var ms = Math.round(performance.now() - t0);
     if (skelOpts.merge < 0) {
       $("mergeVal").textContent = "auto — " + Math.round(skel.mergeUsed) + " px";
@@ -1146,7 +1973,10 @@
         " · " + skel.pointCount + " points · pen " + Math.round(skel.strokeWidth) + " px · " + ms + " ms" +
         (skel.strokes.length > 6 ? '<br><span style="color:#e8cc63">Lots of separate strokes — the route will need connector legs between them.</span>' : "")
       : '<span style="color:#e8cc63">Nothing found — try moving the threshold or ticking the invert box.</span>';
-    drawSkeletonOverlay();
+    shapeEditStats();
+    drawSkeletonOverlay(true);
+    regenBound(false);
+    if (wantedMode) { var w = wantedMode; wantedMode = null; setMode(w); }
   }
 
   $("thr").addEventListener("input", function (e) {
@@ -1947,6 +2777,9 @@
     // Seed the segment cache with the geometry the matcher actually found, so the
     // route on screen is exactly the one that was scored — no re-routing drift.
     // Dragging a point later re-routes just that pair through the usual path.
+    state.bound = !!r.openGround;
+    state.startIdx = 0;
+    state.reverse = false;
     if (!r.openGround) {
       state.points = r.anchors.map(function (a) { return { lat: a[0], lng: a[1] }; });
     }
@@ -1958,7 +2791,8 @@
       // lines — snapping them to roads would undo the whole point of this mode.
       state.snap = false;
       $("snap").checked = false;
-      state.points = decimate(r.geometry, 60).map(function (a) { return { lat: a[0], lng: a[1] }; });
+      segCache = {};
+      state.points = boundLatLngs().map(function (a) { return { lat: a[0], lng: a[1] }; });
     }
 
     if (r.anchorIndices && r.anchorIndices.length === r.anchors.length) {
@@ -1974,7 +2808,9 @@
     renderRoute();
     save();
     previewLayer.clearLayers();
-    toast("Loaded. Open “Edit by hand” if you want to tweak it.");
+    toast(r.openGround
+      ? "Loaded. Drag it to move, corners to resize, the handle above to spin."
+      : "Loaded. Open “Edit by hand” if you want to tweak it.");
   }
 
   /* -------------------------------------------------------------- restore */
@@ -1997,6 +2833,8 @@
 
     $("opacity").value = Math.round(state.opacity * 100);
     $("opacityVal").textContent = Math.round(state.opacity * 100) + "%";
+    $("shapeOpacity").value = Math.round(state.opacity * 100);
+    $("shapeOpacityVal").textContent = Math.round(state.opacity * 100) + "%";
     $("rot").value = state.rotation;
     $("rotVal").textContent = (+state.rotation).toFixed(1) + "°";
     $("blend").value = state.blend;
@@ -2016,7 +2854,12 @@
     }
     renderSurfaces();
     syncSizeUI();
-    setMode(state.mode || "pan");
+    if ((state.mode || "pan") === "shape" && !shapeSrc()) {
+      wantedMode = "shape";       // picked up once the logo has been traced
+      setMode("pan");
+    } else {
+      setMode(state.mode || "pan");
+    }
     // settings saved before this used hectares
     if (state.minAreaAcres === undefined && state.minAreaHa !== undefined) {
       state.minAreaAcres = Math.max(1, Math.round(state.minAreaHa * 2.47105));
@@ -2031,11 +2874,13 @@
     if (state.img) {
       imgEl.src = state.img;
       var ri = new Image();
-      ri.onload = function () { srcImage = ri; updateSkeleton(); };
+      ri.onload = function () { srcImage = ri; updateSkeleton(true); };
       ri.src = state.img;
     }
     drawOverlay();
     renderRoute();
+    shapeEditStats();
+    refreshBound();
   })();
 
   // Debug handle — handy for tinkering from the console.
@@ -2046,6 +2891,10 @@
                       openPolys: function () { return openPolys; },
                       graphKey: function () { return graphKey; },
                       skel: function () { return skel; },
+                      shapeSrc: function () { return shapeSrc(); },
+                      regenBound: regenBound,
+                      unbind: unbind,
+                      setMode: setMode,
                       skelOpts: skelOpts };
 
   setTimeout(function () { map.invalidateSize(); drawOverlay(); }, 100);

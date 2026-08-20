@@ -47,6 +47,27 @@ triangles.
      much of the drawing it covers, and how much detour it racks up.
 5. **Export** — GPX track, ready for a watch.
 
+### Editing the shape by hand
+
+Tracing gets you close; **Edit the shape's points** lets you finish the job. It puts
+a handle on every point of the centerline:
+
+- **drag** one to move it
+- **click a line** to add a point there
+- **right-click** a point to remove it
+- **alt-click** a line to delete that whole stroke
+- <kbd>U</kbd> undoes, and **Reset** goes back to the traced centerline
+
+The logo overlay comes back up when you enter the mode — there's no point dragging
+points over artwork you can't see — and a slider right there dials it up and down.
+
+Edits live on a copy of the trace, so nothing is destroyed. Moving any of the
+*Fine-tune the tracing* sliders re-traces from the image and discards them, which
+the tool says out loud rather than quietly throwing your work away.
+
+Everything downstream uses the edited shape: the search, the drawing order, and
+any route linked to it.
+
 ### Streets, or open ground
 
 **Trace on: Streets / Open ground.**
@@ -69,6 +90,39 @@ included but are usually private, which is exactly why results name the place �
 **checking that the ground is open to you is your call, not the tool's.** And
 applying an open-ground result turns road-snapping off, since snapping the points
 back to streets would undo the whole point.
+
+### Moving a route around a park
+
+Applying an open-ground result **links** the route to the shape. The drawing *is*
+the route there, so it moves as one object:
+
+- **drag the route** to slide it somewhere else
+- **drag a corner** to resize it — the distance readout follows as you drag
+- **drag the handle on the stem above it** to spin it; hold <kbd>shift</kbd> to
+  snap to 15°
+
+The logo overlay, the centerline and the route all move together, and with open
+ground downloaded the panel says whether the whole thing is still on the grass —
+otherwise it's easy to drag a route neatly into a car park. Editing shape points
+moves a linked route too.
+
+**Unlink** gives every point its own handle back; **Link it back to the shape**
+returns to tracing the drawing.
+
+### Start, finish and which way round
+
+Every route shows where it starts and where it ends: a single green **S/F** marker
+for a loop, **S** and **F** for an out-and-back. White chevrons along the line show
+the direction it runs.
+
+- **Reverse** runs the same route the other way.
+- **Set start point**, then a click on the route, moves the start anywhere on a
+  loop — the finish follows it round.
+- An out-and-back can only start at one of its two ends, so there Reverse is the
+  only move and the panel says so instead of pretending otherwise.
+
+Start and direction are what the GPX exports, so this is the difference between
+beginning your run at the car and beginning it a mile away.
 
 ### The search area
 
@@ -141,6 +195,8 @@ still draws the shape correctly, rather than cutting across it with a dead leg.
   between disconnected parts of the artwork. Fewer, longer strokes are better.
 - **Ink threshold** is the first thing to adjust if the centerline looks wrong,
   then **prune corner spurs** if you get stubby branches at stroke ends.
+- **Fix it by hand** when the search has done all it can — nudging a handful of
+  points does more for a nearly-right shape than another search will.
 - **Close up crossings** merges the twin junctions that thinning leaves wherever
   two strokes cross, so they meet at a point instead of being joined by a short
   bridge. It sizes itself from the detected pen thickness; raise it if crossings
