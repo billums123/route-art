@@ -168,6 +168,8 @@
   .res .q.bad{background:#43202a;color:#ff9db1}
   .res .meta{color:var(--ink-dim);font-size:10.5px;margin-top:3px}
   .res .use{margin-top:6px;width:100%;font-size:11px;padding:4px}
+  .res.live{border-color:var(--accent);background:#211f36}
+  .res .q.live{background:#2f2a52;color:#c9c2ff}
   #cursorMode{
     position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:1200;
     background:#000b;border:1px solid var(--line);color:#fff;padding:5px 12px;border-radius:20px;
@@ -668,6 +670,7 @@
     refreshBound();
     drawEnds(line);
     drawArrows(line);
+    syncApplied(line, false);
     /* A linked route is moved as a whole, so it gets transform handles instead
        of three hundred point dots. */
     if (state.bound) drawTransform();
@@ -1299,7 +1302,11 @@
   });
   $("clearRoute").addEventListener("click", function () {
     unbind(true);
-    state.points = []; renderRoute(); save();
+    applied = null;
+    state.points = [];
+    renderRoute();
+    renderResults();
+    save();
   });
 
   ["distMin", "distMax", "distUnit"].forEach(function (id) {
@@ -1674,6 +1681,7 @@
       updateStats(m);
       drawEnds(l);
       drawArrows(l);
+      syncApplied(l, true);
       return;
     }
     if (!state.snap) segCache = {};   // straight legs cost nothing to rebuild
@@ -1865,26 +1873,60 @@
     return inside;
   }
 
-  /* Once you can drag a route around, you can drag it off the grass — so say so. */
-  function groundReport() {
+  /* Distance from a point to the edge of its polygon — the same thing the
+     search calls clearance, recomputed here once the route has been moved. */
+  function ringDist(lat, lng, pts) {
+    var mLat = 110574, mLng = 111320 * Math.cos(lat * Math.PI / 180);
+    var best = Infinity, i, j;
+    for (i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      var ax = (pts[j][1] - lng) * mLng, ay = (pts[j][0] - lat) * mLat;
+      var bx = (pts[i][1] - lng) * mLng, by = (pts[i][0] - lat) * mLat;
+      var dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+      var t = L2 ? -(ax * dx + ay * dy) / L2 : 0;
+      t = clamp(t, 0, 1);
+      var d = Math.hypot(ax + t * dx, ay + t * dy);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  /* Once you can drag a route around, you can drag it off the grass — so measure
+     where it actually is now rather than where the search put it. */
+  function groundStats() {
     var polys = openPolys && openPolys.polys;
-    if (!polys || !polys.length || !state.points.length) return "";
-    var off = 0, home = null, i, k;
+    if (!polys || !polys.length || !state.points.length) return null;
+    var off = 0, home = null, clear = Infinity, i, k;
     for (i = 0; i < state.points.length; i++) {
-      var pt = state.points[i], ok = false;
+      var pt = state.points[i], inside = null;
       for (k = 0; k < polys.length; k++) {
         var b = polyBox(polys[k]);
         if (pt.lat < b[0] || pt.lat > b[2] || pt.lng < b[1] || pt.lng > b[3]) continue;
         if (!pointInPoly(pt.lat, pt.lng, polys[k].pts)) continue;
-        ok = true;
-        if (!home) home = polys[k].name || polys[k].kind;
+        inside = polys[k];
         break;
       }
-      if (!ok) off++;
+      if (!inside) { off++; clear = 0; continue; }
+      if (!home) home = inside.name || inside.kind;
+      if (clear > 0) {
+        var d = ringDist(pt.lat, pt.lng, inside.pts);
+        if (d < clear) clear = d;
+      }
     }
-    if (!off) return '<span style="color:var(--ok)">All of it is on open ground' +
-                     (home ? " — " + home : "") + ".</span>";
-    return '<span style="color:#e8cc63">' + Math.round(100 * off / state.points.length) +
+    return { off: off, total: state.points.length, place: home,
+             clearance: clear === Infinity ? 0 : Math.round(clear) };
+  }
+
+  var lastGround = null;
+
+  function groundReport() {
+    lastGround = groundStats();
+    var g = lastGround;
+    if (!g) return "";
+    if (!g.off) {
+      return '<span style="color:var(--ok)">All of it is on open ground' +
+             (g.place ? " — " + g.place : "") + ".</span>";
+    }
+    return '<span style="color:#e8cc63">' + Math.round(100 * g.off / g.total) +
            "% of it is off the open ground.</span>";
   }
 
@@ -2015,6 +2057,8 @@
   var netBounds = null;      // the area that payload covers
   var graphKey = null;       // surface mix the worker's graph was built from
   var results = [];
+  var applied = null;       // the result currently loaded onto the map
+  var appliedEls = null;    // its card's live bits
   var busy = false;
   var previewLayer = L.layerGroup().addTo(map);
 
@@ -2668,7 +2712,10 @@
      and on how much of the run isn't drawing the logo at all. A flat "under 30 m"
      rule called a 700 m logo with 45 m of drift a strong match, which it isn't. */
   function quality(r) {
-    if (r.openGround) return { cls: "good", label: "Exact trace" };
+    if (r.openGround) {
+      if (r.offFraction > 0.02) return { cls: "bad", label: "Off the grass" };
+      return { cls: "good", label: "Exact trace" };
+    }
     var drift = r.spanMeters ? r.p90 / r.spanMeters : 1;
     var stray = r.strayFraction === undefined ? 1 : r.strayFraction;
     if (drift < 0.025 && stray < 0.12) return { cls: "good", label: "Strong match" };
@@ -2677,66 +2724,149 @@
     return { cls: "bad", label: "Barely reads" };
   }
 
-  function renderResults() {
-    var host = $("matchResults");
-    host.innerHTML = "";
+  function resCard(r) {
     var unit = $("distUnit").value;
-    results.forEach(function (r, i) {
-      var q = quality(r);
-      var dist = unit === "mi" ? (r.lengthMeters / 1609.344).toFixed(2) + " mi"
-                               : (r.lengthMeters / 1000).toFixed(2) + " km";
-      var alt  = unit === "mi" ? (r.lengthMeters / 1000).toFixed(2) + " km"
-                               : (r.lengthMeters / 1609.344).toFixed(2) + " mi";
-      var el = document.createElement("div");
-      el.className = "res";
-      if (r.openGround) {
-        var elO = document.createElement("div");
-        elO.className = "res";
-        elO.innerHTML =
-          '<div class="top"><b>' + dist + "</b>" +
-          '<span class="q good">Exact trace</span></div>' +
-          '<div class="meta">' + alt + " · in " + (r.place || "open ground") +
-          " · " + fmtGround(r.spanMeters || 0) + " across · " + fmtGround(r.clearance) + " clear" +
-          (Math.abs(r.rotation) >= 1 ? " · " + Math.round(r.rotation) + "°" : "") +
-          (r.inRange ? "" : " · outside your range") + "</div>" +
-          '<button class="use">Use this route</button>';
-        if (!r.inRange) elO.style.opacity = "0.72";
-        elO.addEventListener("mouseenter", function () { previewResult(r); });
-        elO.addEventListener("click", function (ev) {
-          selectResult(i);
-          if (ev.target.classList.contains("use")) applyResult(r);
-        });
-        host.appendChild(elO);
-        return;
-      }
+    var dist = unit === "mi" ? (r.lengthMeters / 1609.344).toFixed(2) + " mi"
+                             : (r.lengthMeters / 1000).toFixed(2) + " km";
+    var alt  = unit === "mi" ? (r.lengthMeters / 1000).toFixed(2) + " km"
+                             : (r.lengthMeters / 1609.344).toFixed(2) + " mi";
+    var q = quality(r), meta;
+    if (r.openGround) {
+      var off = r.offFraction ? Math.round(100 * r.offFraction) : 0;
+      meta = alt + " · " + (off ? off + "% of it off the open ground"
+                                : "in " + (r.place || "open ground")) +
+        " · " + fmtGround(r.spanMeters || 0) + " across" +
+        (off ? "" : " · " + fmtGround(r.clearance) + " clear") +
+        (Math.abs(r.rotation) >= 1 ? " · " + Math.round(r.rotation) + "°" : "") +
+        (r.inRange ? "" : " · outside your range");
+    } else {
       var drift = r.spanMeters ? Math.round(100 * r.p90 / r.spanMeters) : null;
       var stray = r.strayFraction === undefined ? null : Math.round(100 * r.strayFraction);
-      var meta = alt + " · logo " + fmtGround(r.spanMeters || 0) + " wide" +
+      meta = alt + " · logo " + fmtGround(r.spanMeters || 0) + " wide" +
         (drift === null ? "" : " · drifts " + drift + "% of that") +
         (stray ? " · " + stray + "% off-shape" : "") +
         (Math.abs(r.rotation) >= 1 ? " · " + Math.round(r.rotation) + "°" : "") +
         (r.connectorMeters > 20 ? " · " + (r.connectorMeters / 1000).toFixed(1) + " km connectors" : "") +
-        (r.inRange ? "" : " · outside your range");
+        (r.inRange ? "" : " · outside your range") +
+        (r.edited ? " · edited by hand, so those last two are from where it was found" : "");
+    }
+    return { dist: dist, meta: meta, q: q };
+  }
+
+  function renderResults() {
+    var host = $("matchResults");
+    host.innerHTML = "";
+    appliedEls = null;
+    results.forEach(function (r, i) {
+      var c = resCard(r);
+      var live = r === applied;
+      var el = document.createElement("div");
+      el.className = "res" + (live ? " live" : "");
       el.innerHTML =
-        '<div class="top"><b>' + dist + "</b>" +
-        '<span class="q ' + q.cls + '">' + q.label + "</span></div>" +
-        '<div class="meta">' + meta + "</div>" +
-        '<button class="use">Use this route</button>';
+        '<div class="top"><b>' + c.dist + "</b>" +
+        (live ? '<span class="q live">Loaded</span>' : "") +
+        '<span class="q ' + c.q.cls + '">' + c.q.label + "</span></div>" +
+        '<div class="meta">' + c.meta + "</div>" +
+        '<button class="use">' +
+        (live ? (r.edited ? "Put it back where it was found" : "Loaded") : "Use this route") +
+        "</button>";
       if (!r.inRange) el.style.opacity = "0.72";
-      el.addEventListener("mouseenter", function () { previewResult(r); });
+      if (live) {
+        var qs = el.querySelectorAll(".q");
+        appliedEls = { dist: el.querySelector(".top b"), meta: el.querySelector(".meta"),
+                       q: qs[qs.length - 1], btn: el.querySelector(".use") };
+        appliedEls.btn.disabled = !r.edited;
+      }
+      el.addEventListener("mouseenter", function () { if (!live) previewResult(r); });
       el.addEventListener("click", function (ev) {
         selectResult(i);
-        if (ev.target.classList.contains("use")) applyResult(r);
+        if (!ev.target.classList.contains("use")) return;
+        if (live) revertApplied();
+        else applyResult(r);
       });
       host.appendChild(el);
     });
+  }
+
+  /* The loaded route's card tracks what you do to it — length, where it is, how
+     much room it has left — instead of freezing at whatever the search found. */
+  function shapeSpanMeters() {
+    var rad = 0;
+    shapeRuns().forEach(function (run) {
+      run.forEach(function (uv) {
+        var d = Math.hypot(uv[0], uv[1]);
+        if (d > rad) rad = d;
+      });
+    });
+    return rad * 2 * state.widthM;
+  }
+
+  function syncApplied(line, live) {
+    if (!applied || !line || line.length < 2) return;
+    var r = applied, m = 0, i;
+    for (i = 1; i < line.length; i++) m += haversine(line[i - 1], line[i]);
+    r.lengthMeters = m;
+    var range = distanceRange();
+    r.inRange = !range || (m >= range.minMeters && m <= range.maxMeters);
+    if (state.bound) {
+      r.center = [state.center.lat, state.center.lng];
+      r.rotation = state.rotation;
+      r.widthMeters = state.widthM;
+      r.spanMeters = shapeSpanMeters();
+      r.geometry = line;
+      r.connectorFlags = [];
+      for (i = 0; i < line.length; i++) r.connectorFlags.push(false);
+    }
+    if (!live) {
+      if (state.bound && lastGround) {
+        r.place = lastGround.place;
+        r.offFraction = lastGround.total ? lastGround.off / lastGround.total : 0;
+        r.clearance = lastGround.clearance;
+      }
+      var f = r.found;
+      r.edited = !!f && (Math.abs(f.lengthMeters - m) > 5 ||
+                         Math.abs(f.rotation - r.rotation) > 0.5 ||
+                         Math.abs(f.widthMeters - r.widthMeters) > 1 ||
+                         Math.abs(f.center[0] - r.center[0]) > 1e-6 ||
+                         Math.abs(f.center[1] - r.center[1]) > 1e-6);
+    }
+    paintAppliedCard();
+  }
+
+  function paintAppliedCard() {
+    if (!appliedEls || !applied) return;
+    var c = resCard(applied);
+    appliedEls.dist.textContent = c.dist;
+    appliedEls.meta.innerHTML = c.meta;
+    appliedEls.q.textContent = c.q.label;
+    appliedEls.q.className = "q " + c.q.cls;
+    appliedEls.btn.textContent = applied.edited ? "Put it back where it was found" : "Loaded";
+    appliedEls.btn.disabled = !applied.edited;
+  }
+
+  function revertApplied() {
+    var r = applied, f = r && r.found;
+    if (!f || !r.edited) return;
+    r.center = f.center.slice();
+    r.rotation = f.rotation;
+    r.widthMeters = f.widthMeters;
+    r.lengthMeters = f.lengthMeters;
+    r.spanMeters = f.spanMeters;
+    r.place = f.place;
+    r.clearance = f.clearance;
+    r.geometry = f.geometry;
+    r.connectorFlags = f.connectorFlags;
+    r.offFraction = 0;
+    r.edited = false;
+    applyResult(r);
+    toast("Back where the search found it.");
   }
 
   function selectResult(i) {
     Array.prototype.forEach.call($("matchResults").children, function (c, j) {
       c.classList.toggle("sel", j === i);
     });
-    previewResult(results[i]);
+    if (results[i] !== applied) previewResult(results[i]);
   }
 
   function previewResult(r) {
@@ -2765,6 +2895,12 @@
   }
 
   function applyResult(r) {
+    if (!r.found) {
+      r.found = { center: r.center.slice(), rotation: r.rotation, widthMeters: r.widthMeters,
+                  lengthMeters: r.lengthMeters, spanMeters: r.spanMeters, place: r.place,
+                  clearance: r.clearance, geometry: r.geometry, connectorFlags: r.connectorFlags };
+    }
+    applied = r;
     state.center = { lat: r.center[0], lng: r.center[1] };
     state.widthM = r.widthMeters;
     state.rotation = r.rotation;
@@ -2806,6 +2942,8 @@
 
     setMode("pan");
     renderRoute();
+    renderResults();
+    paintAppliedCard();
     save();
     previewLayer.clearLayers();
     toast(r.openGround

@@ -339,6 +339,61 @@
       }
     }
 
+    /* Thinning doesn't always leave a crossing as a junction at all: a thick
+       overlap can come out as a small hole with the branch ends loose around it,
+       and then nothing knows those branches meet. Weld loose ends that sit
+       within a pen-width or so of each other onto one point, so the crossing
+       becomes a real junction that a run can pass straight through. */
+    if (bridgeLen > 0) {
+      var adjW = adjacency();
+      var loose = [];
+      edges.forEach(function (e, ei) {
+        if (e.dead) return;
+        var last = e.pts.length - 1;
+        if ((adjW.get(key(e.pts[0])) || []).length === 1) loose.push({ ei: ei, at: 0 });
+        if ((adjW.get(key(e.pts[last])) || []).length === 1) loose.push({ ei: ei, at: last });
+      });
+
+      var owner = loose.map(function (_, i) { return i; });
+      function rootOf(x) { while (owner[x] !== x) { owner[x] = owner[owner[x]]; x = owner[x]; } return x; }
+      var gaps = {};
+      for (var li = 0; li < loose.length; li++) {
+        for (var lj = li + 1; lj < loose.length; lj++) {
+          var pi = edges[loose[li].ei].pts[loose[li].at];
+          var pj = edges[loose[lj].ei].pts[loose[lj].at];
+          var gap = Math.hypot(pi[0] - pj[0], pi[1] - pj[1]);
+          if (gap > bridgeLen) continue;
+          var ri = rootOf(li), rj = rootOf(lj);
+          if (ri !== rj) owner[ri] = rj;
+          var rr = rootOf(li);
+          if (gaps[rr] === undefined || gap < gaps[rr]) gaps[rr] = gap;
+        }
+      }
+
+      var clusters = {};
+      for (var lk = 0; lk < loose.length; lk++) {
+        var rk = rootOf(lk);
+        if (!clusters[rk]) clusters[rk] = [];
+        clusters[rk].push(loose[lk]);
+      }
+      Object.keys(clusters).forEach(function (ck) {
+        var group = clusters[ck];
+        if (group.length < 2) return;
+        /* Three or more ends is a crossing. Exactly two is only a gap worth
+           closing if it is small — two stroke tips that merely come close
+           should stay two tips. */
+        if (group.length === 2 && !(gaps[ck] <= bridgeLen * 0.4)) return;
+        var sx = 0, sy = 0;
+        group.forEach(function (g) {
+          var pt = edges[g.ei].pts[g.at];
+          sx += pt[0];
+          sy += pt[1];
+        });
+        var M = [Math.round(sx / group.length), Math.round(sy / group.length)];
+        group.forEach(function (g) { edges[g.ei].pts[g.at] = M.slice(); });
+      });
+    }
+
     changed = true; guard = 0;
     while (changed && guard++ < 2000) {
       changed = false;
@@ -589,6 +644,180 @@
     return circuit;
   }
 
+  /* ---- running straight through a crossing -------------------------------
+
+     An Euler tour can leave a junction by any unused edge, and picking the
+     first one gives hairpins: the route arrives at a crossing and doubles
+     straight back on itself, which is horrible to run. So decide the pairing
+     at every junction FIRST, matching each arriving end with the end that
+     most nearly continues it. That decomposes the graph into smooth walks;
+     if it leaves more than one, merge them by swapping the single cheapest
+     transition until one walk covers everything. */
+
+  function endTangent(pts, atStart) {
+    var n = pts.length, want = 10;
+    var p0 = atStart ? pts[0] : pts[n - 1];
+    var prev = p0, cur = p0, acc = 0, i;
+    if (atStart) {
+      for (i = 1; i < n; i++) {
+        cur = pts[i];
+        acc += Math.hypot(cur[0] - prev[0], cur[1] - prev[1]);
+        prev = cur;
+        if (acc >= want) break;
+      }
+    } else {
+      for (i = n - 2; i >= 0; i--) {
+        cur = pts[i];
+        acc += Math.hypot(cur[0] - prev[0], cur[1] - prev[1]);
+        prev = cur;
+        if (acc >= want) break;
+      }
+    }
+    var dx = cur[0] - p0[0], dy = cur[1] - p0[1];
+    var L = Math.hypot(dx, dy);
+    return L ? [dx / L, dy / L] : [0, 0];
+  }
+
+  function bestPairing(list, cost) {
+    if (list.length < 2) return { cost: 0, pairs: [] };
+    var a = list[0], best = null, i;
+    for (i = 1; i < list.length; i++) {
+      var rest = list.slice(1);
+      rest.splice(i - 1, 1);
+      var sub = bestPairing(rest, cost);
+      var c = cost(a, list[i]) + sub.cost;
+      if (!best || c < best.cost) best = { cost: c, pairs: [[a, list[i]]].concat(sub.pairs) };
+    }
+    return best;
+  }
+
+  function greedyPairing(list, cost) {
+    var left = list.slice(), pairs = [], total = 0;
+    while (left.length > 1) {
+      var bi = 1, bc = Infinity, i;
+      for (i = 1; i < left.length; i++) {
+        var c = cost(left[0], left[i]);
+        if (c < bc) { bc = c; bi = i; }
+      }
+      pairs.push([left[0], left[bi]]);
+      total += bc;
+      left.splice(bi, 1);
+      left.shift();
+    }
+    return { cost: total, pairs: pairs };
+  }
+
+  function pairEnds(list, cost) {
+    if (list.length < 2) return [];
+    if (list.length % 2 === 0) {
+      return (list.length > 8 ? greedyPairing(list, cost) : bestPairing(list, cost)).pairs;
+    }
+    var best = null, i;                       // an odd node leaves one end free
+    for (i = 0; i < list.length; i++) {
+      var rest = list.slice();
+      rest.splice(i, 1);
+      var p = rest.length > 8 ? greedyPairing(rest, cost) : bestPairing(rest, cost);
+      if (!best || p.cost < best.cost) best = p;
+    }
+    return best.pairs;
+  }
+
+  /* Returns [{edge, forward}] covering every entry of `multi` once, or null if
+     it can't (the caller then falls back to a plain Euler tour). */
+  function smoothTour(multi, edges, pos) {
+    var E = multi.length;
+    if (!E) return null;
+    var nEnd = E * 2, node = new Array(nEnd), dir = new Array(nEnd), m, e, k;
+    for (m = 0; m < E; m++) {
+      e = edges[multi[m]];
+      node[m * 2] = pos.get(e.a);
+      node[m * 2 + 1] = pos.get(e.b);
+      dir[m * 2] = endTangent(e.pts, true);
+      dir[m * 2 + 1] = endTangent(e.pts, false);
+    }
+    /* 0 when the two ends point straight through each other, 2 for a hairpin. */
+    function cost(i, j) { return 1 + (dir[i][0] * dir[j][0] + dir[i][1] * dir[j][1]); }
+    function mate(x) { return x % 2 ? x - 1 : x + 1; }
+
+    var byNode = {};
+    for (k = 0; k < nEnd; k++) {
+      if (!byNode[node[k]]) byNode[node[k]] = [];
+      byNode[node[k]].push(k);
+    }
+    var link = new Array(nEnd);
+    for (k = 0; k < nEnd; k++) link[k] = -1;
+    Object.keys(byNode).forEach(function (nk) {
+      pairEnds(byNode[nk], cost).forEach(function (pr) {
+        link[pr[0]] = pr[1];
+        link[pr[1]] = pr[0];
+      });
+    });
+
+    function walksNow() {
+      var seen = new Array(E), out = [], i;
+      for (i = 0; i < E; i++) seen[i] = 0;
+      function trace(s) {
+        var seq = [], x = s;
+        for (;;) {
+          if (seen[x >> 1]) break;
+          seen[x >> 1] = 1;
+          seq.push(x);
+          var nx = link[mate(x)];
+          if (nx < 0 || nx === s) break;
+          x = nx;
+        }
+        return seq;
+      }
+      for (i = 0; i < nEnd; i++) {          // open walks start at a free end
+        if (link[i] < 0 && !seen[i >> 1]) {
+          var w = trace(i);
+          if (w.length) out.push(w);
+        }
+      }
+      for (i = 0; i < nEnd; i++) {
+        if (!seen[i >> 1]) {
+          var w2 = trace(i);
+          if (w2.length) out.push(w2);
+        }
+      }
+      return out;
+    }
+
+    var walks = walksNow(), guard = 0;
+    while (walks.length > 1 && guard++ < 400) {
+      var owner = new Array(nEnd), i, j;
+      for (i = 0; i < nEnd; i++) owner[i] = -1;
+      walks.forEach(function (w, idx) {
+        w.forEach(function (x) { owner[x] = idx; owner[mate(x)] = idx; });
+      });
+      var best = null;
+      for (i = 0; i < nEnd; i++) {
+        var ia = link[i];
+        if (ia < 0 || ia < i) continue;                 // each transition once
+        for (j = 0; j < nEnd; j++) {
+          var jb = link[j];
+          if (jb < 0 || jb < j) continue;
+          if (node[j] !== node[i] || owner[j] === owner[i]) continue;
+          var base = cost(i, ia) + cost(j, jb);
+          var o1 = cost(i, j) + cost(ia, jb);
+          var o2 = cost(i, jb) + cost(ia, j);
+          var pick = o1 <= o2
+            ? { a: [i, j], b: [ia, jb], d: o1 - base }
+            : { a: [i, jb], b: [ia, j], d: o2 - base };
+          if (!best || pick.d < best.d) best = pick;
+        }
+      }
+      if (!best) break;
+      link[best.a[0]] = best.a[1]; link[best.a[1]] = best.a[0];
+      link[best.b[0]] = best.b[1]; link[best.b[1]] = best.b[0];
+      walks = walksNow();
+    }
+    if (walks.length !== 1 || walks[0].length !== E) return null;
+    return walks[0].map(function (x) {
+      return { edge: multi[x >> 1], forward: x % 2 === 0 };
+    });
+  }
+
   /* Returns one polyline per connected component, each covering every stroke. */
   function drawingRuns(strokes) {
     if (!strokes.length) return [];
@@ -662,14 +891,19 @@
         adj.get(b).push({ to: a, edge: ei, uid: uid, forward: false });
       });
 
-      var start = odd.length ? odd[0] : ap.pos.get(edges[edgeIdxs[0]].a);
-      var circuit = hierholzer(adj, start);
+      var order = smoothTour(multi, edges, ap.pos);
+      if (!order) {
+        var start = odd.length ? odd[0] : ap.pos.get(edges[edgeIdxs[0]].a);
+        order = [];
+        hierholzer(adj, start).forEach(function (step) {
+          if (step.via) order.push({ edge: step.via.edge, forward: step.via.forward });
+        });
+      }
 
       var poly = [];
-      circuit.forEach(function (step) {
-        if (!step.via) return;
-        var pts = edges[step.via.edge].pts;
-        var list = step.via.forward ? pts : pts.slice().reverse();
+      order.forEach(function (step) {
+        var pts = edges[step.edge].pts;
+        var list = step.forward ? pts : pts.slice().reverse();
         if (poly.length) poly = poly.concat(list.slice(1));
         else poly = poly.concat(list);
       });
@@ -752,6 +986,7 @@
     pruneAndMerge: pruneAndMerge,
     sequence: sequence,
     drawingRuns: drawingRuns,
+    smoothTour: smoothTour,
     toShapeUnits: toShapeUnits,
     polyLen: polyLen
   };

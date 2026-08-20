@@ -167,6 +167,11 @@ tail behind a well-behaved majority. Badges run **Strong / Fair / Rough / Barely
 reads**, and if the best result is still poor the tool says so and suggests the
 size that would fix it.
 
+The card for the route you've loaded says **Loaded**, and its numbers follow
+what you do to it — length, which park it's in now, how much room it has left,
+whether it's still inside your distance range. Drag it off the grass and the
+badge says so. **Put it back where it was found** undoes the lot.
+
 **The single biggest lever is drawing it bigger.** A logo spanning 15+ blocks
 reads; one spanning 6 cannot, no matter how good the search is.
 
@@ -178,6 +183,21 @@ problem](https://en.wikipedia.org/wiki/Chinese_postman_problem). Where more than
 two nodes have an odd number of strokes meeting them, the cheapest connecting
 strokes get duplicated — on the ground that means running a leg twice, which
 still draws the shape correctly, rather than cutting across it with a dead leg.
+
+**Crossings are run straight through.** Any tour is allowed to leave a junction
+by any unused branch, and the obvious implementation picks the first one — which
+means arriving at a crossing and doubling straight back on yourself. Instead the
+pairing at every junction is decided first, matching each arriving branch with
+the one that most nearly continues it, which splits the shape into smooth walks;
+if that leaves more than one, they're merged by swapping the single cheapest
+transition. On a mark that crosses itself you get the flowing figure-eight
+rather than two hairpins.
+
+Thinning doesn't always leave a crossing as a junction at all — a thick overlap
+can come out as a small hole with the branch ends loose around it. Ends that sit
+within about a pen-width of each other are welded onto one point first, so the
+crossing is a junction that the run above can actually use. That's the same
+**Close up crossings** setting; turn it down to zero to leave the trace alone.
 
 ## Getting a good result
 
